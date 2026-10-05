@@ -1,0 +1,5 @@
+{
+  "server_address": "vpn.example.com",
+  "primary_admin_id": 123456789,
+  "network_interface": null
+}

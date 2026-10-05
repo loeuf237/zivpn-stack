@@ -1,0 +1,34 @@
+#!/usr/bin/env python3
+"""Rotate the bot token with hidden input; no credentials in command arguments."""
+import datetime
+import getpass
+import json
+import os
+from pathlib import Path
+import shutil
+import subprocess
+import urllib.request
+
+
+def main():
+    if os.geteuid()!=0:raise SystemExit('Root required')
+    value=getpass.getpass('Nouveau jeton Telegram (saisie masquée) : ').strip()
+    with urllib.request.urlopen('https://api.telegram.org/bot'+value+'/getMe',timeout=10) as response:
+        if not json.load(response).get('ok'):raise ValueError('Token rejected')
+    token=Path('/etc/zivpn/telegram.token')
+    backup=Path('/var/backups/zivpn-maintenance')/(datetime.datetime.now(datetime.timezone.utc).strftime('%Y%m%dT%H%M%SZ')+'-token')
+    backup.mkdir(parents=True,mode=0o700);backup.chmod(0o700)
+    shutil.copy2(token,backup/'telegram.token');(backup/'telegram.token').chmod(0o600)
+    temporary=token.with_name('telegram.token.new');temporary.write_text(value+'\n');temporary.chmod(0o600)
+    os.replace(temporary,token)
+    try:
+        subprocess.run(['systemctl','restart','zivpn-xui-sync'],check=True,timeout=30)
+    except Exception:
+        shutil.copy2(backup/'telegram.token',token)
+        subprocess.run(['systemctl','restart','zivpn-xui-sync'],timeout=30)
+        raise
+    print('Jeton validé et enregistré. Bot redémarré ; VPN inchangé.')
+
+if __name__=='__main__':
+    try:main()
+    except Exception as error:raise SystemExit('Rotation échouée : '+type(error).__name__)

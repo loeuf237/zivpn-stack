@@ -1,0 +1,12 @@
+{
+  "go_version": "1.21.13",
+  "go": {
+    "amd64": "502fc16d5910562461e6a6631fb6377de2322aad7304bf2bcd23500ba9dab4a7",
+    "arm64": "2ca2d70dc9c84feef959eb31f2a5aac33eefd8c97fe48f1548886d737bffabd4"
+  },
+  "xui_version": "3.8.5",
+  "xui": {
+    "amd64": "6a85c110a04a727613c933c54ae602b8d37dab8876c6e20a6d46623010dd9d3c",
+    "arm64": "2dd601a32426fb19b0eafdffaead374a9cdb66be4dfb39407f9f50fa4e7234e7"
+  }
+}

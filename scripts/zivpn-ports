@@ -1,0 +1,17 @@
+#!/usr/bin/env bash
+# Native tunnel proxying needs NAT aliases, not blanket FORWARD accepts.
+set -euo pipefail
+nic=$(ip -4 route show default | awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="dev") {print $(i+1); exit}}')
+[[ -n "$nic" ]]
+iptables -w 5 -t nat -N ZIVPN-UDP 2>/dev/null || true
+iptables -w 5 -t nat -F ZIVPN-UDP
+iptables -w 5 -t nat -A ZIVPN-UDP -p udp -m multiport --dports 5666,80,443,8080,8443,8888 -j REDIRECT --to-ports 5667
+iptables -w 5 -t nat -A ZIVPN-UDP -p udp --dport 6000:30000 -j REDIRECT --to-ports 5667
+iptables -w 5 -t nat -C PREROUTING -i "$nic" -p udp -j ZIVPN-UDP 2>/dev/null || iptables -w 5 -t nat -A PREROUTING -i "$nic" -p udp -j ZIVPN-UDP
+# Compatibility with the bot's optional P2P toggle; disabled initially.
+iptables -w 5 -N BLOCK-P2P 2>/dev/null || true
+iptables -w 5 -F BLOCK-P2P
+iptables -w 5 -A BLOCK-P2P -p udp --sport 5667 -j RETURN
+iptables -w 5 -A BLOCK-P2P -p udp --sport 5668 -j RETURN
+iptables -w 5 -A BLOCK-P2P -p tcp -m multiport --dports 6881:6889,6969,51413 -j DROP
+iptables -w 5 -A BLOCK-P2P -p udp -m multiport --dports 6881:6889,6969,51413 -j DROP

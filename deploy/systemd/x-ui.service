@@ -1,0 +1,16 @@
+[Unit]
+Description=3X-UI panel
+After=network.target
+Wants=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/usr/local/x-ui
+Environment=XUI_DB_FOLDER=/etc/x-ui
+ExecStart=/usr/local/x-ui/x-ui
+Restart=on-failure
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

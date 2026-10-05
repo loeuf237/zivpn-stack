@@ -1,0 +1,3 @@
+#!/usr/bin/env bash
+set -euo pipefail
+python3 tools/secret_scan.py --staged

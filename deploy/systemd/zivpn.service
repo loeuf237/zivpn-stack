@@ -1,0 +1,23 @@
+[Unit]
+Description=ZiVPN native UDP server with account/IP bandwidth limits
+Wants=network-online.target
+Requires=zivpn-ports.service
+After=network-online.target zivpn-ports.service
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/etc/zivpn
+ExecStart=/usr/local/bin/zivpn-native -config /etc/zivpn/config.json -secondary :5668
+ExecStop=/usr/local/sbin/zivpn-native-save-traffic
+Restart=always
+RestartSec=3
+UMask=0077
+NoNewPrivileges=true
+ProtectHome=true
+PrivateTmp=true
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target

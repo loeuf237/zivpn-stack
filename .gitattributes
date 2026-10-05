@@ -1,0 +1,5 @@
+*.dat binary
+*.go text eol=lf
+*.py text eol=lf
+*.sh text eol=lf
+*.md text eol=lf

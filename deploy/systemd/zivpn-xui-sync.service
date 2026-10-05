@@ -1,0 +1,16 @@
+[Unit]
+Description=ZiVPN accounting and Telegram administration
+After=network-online.target x-ui.service zivpn.service
+Wants=network-online.target x-ui.service zivpn.service
+
+[Service]
+Type=simple
+User=root
+Environment=PYTHONUNBUFFERED=1
+ExecStart=/opt/zivpn/venv/bin/python /usr/local/bin/zivpn-xui-sync.py
+Restart=always
+RestartSec=5
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

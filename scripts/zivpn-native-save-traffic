@@ -1,0 +1,10 @@
+#!/usr/bin/env python3
+"""Flush authenticated traffic before a graceful server shutdown."""
+import sys
+sys.path.insert(0, '/usr/local/lib')
+try:
+    import zivpn_accounting
+    zivpn_accounting.sync_traffic()
+except Exception as error:
+    print('Final traffic sample unavailable: '+type(error).__name__, file=sys.stderr)
+    sys.exit(1)

@@ -1,0 +1,14 @@
+[Unit]
+Description=ZiVPN UDP port aliases
+Wants=network-online.target
+After=network-online.target ufw.service
+Before=zivpn.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/zivpn-ports
+RemainAfterExit=yes
+TimeoutStartSec=60
+
+[Install]
+WantedBy=multi-user.target
