@@ -3,3 +3,7 @@
 *.py text eol=lf
 *.sh text eol=lf
 *.md text eol=lf
+# Preserve unchanged third-party formatting; check locally modified files.
+native/quic/** -whitespace
+native/quic/connection.go whitespace
+native/quic/congestion_update_test.go whitespace

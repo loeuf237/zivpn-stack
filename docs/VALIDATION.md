@@ -15,3 +15,7 @@ Les tests de fermeture UDP ont révélé une course sur le marqueur de timeout d
 Le serveur natif envoie désormais un maintien QUIC toutes les cinq secondes, avec un délai maximal d’inactivité côté serveur de 60 secondes. Le délai effectif reste négocié avec le client ; la cadence de maintien est adaptée par la bibliothèque. Le test `TestServerKeepsIdleClientConnected` reproduit la fermeture d’un client sans maintien puis démontre la survie de la même connexion lorsque le serveur le fournit. Ces paquets de contrôle ne modifient pas les plafonds de charge utile Standard/Premium. Une interruption réelle du réseau reste susceptible de couper un tunnel.
 
 Les journaux de fermeture indiquent compte authentifié, adresse distante et durée pour distinguer inactivité et incidents réseau. Aucun mot de passe ou contenu n’y est ajouté. Les tests ne démontrent pas la correction des plaintes Android sur tous les opérateurs ; celle-ci nécessite une vérification client après déploiement.
+
+## Contrôle de congestion concurrent
+
+GitHub Actions a révélé une autre course, intermittente, entre les ACK QUIC et la sélection de BBR à l’authentification. Le fork local documenté dans `native/quic/ZIVPN-PATCHES.md` applique désormais ces changements dans la boucle de connexion. Le test ciblé de handshake et celui des setters concurrents passent sur 50 répétitions avec détection de courses. Il ne s’agit pas d’un changement des plafonds ou de l’algorithme BBR.
