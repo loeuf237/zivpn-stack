@@ -68,6 +68,9 @@ func (c *Config) fill() error {
 	} else if c.QUICConfig.MaxIdleTimeout < 4*time.Second || c.QUICConfig.MaxIdleTimeout > 120*time.Second {
 		return errors.ConfigError{Field: "QUICConfig.MaxIdleTimeout", Reason: "must be between 4s and 120s"}
 	}
+	if c.QUICConfig.KeepAlivePeriod < 0 || c.QUICConfig.KeepAlivePeriod > 60*time.Second {
+		return errors.ConfigError{Field: "QUICConfig.KeepAlivePeriod", Reason: "must be between 0s and 60s"}
+	}
 	if c.QUICConfig.MaxIncomingStreams == 0 {
 		c.QUICConfig.MaxIncomingStreams = defaultMaxIncomingStreams
 	} else if c.QUICConfig.MaxIncomingStreams < 8 {
@@ -110,6 +113,7 @@ type QUICConfig struct {
 	InitialConnectionReceiveWindow uint64
 	MaxConnectionReceiveWindow     uint64
 	MaxIdleTimeout                 time.Duration
+	KeepAlivePeriod                time.Duration
 	MaxIncomingStreams             int64
 	DisablePathMTUDiscovery        bool // The server may still override this to true on unsupported platforms.
 }

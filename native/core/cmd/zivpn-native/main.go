@@ -105,8 +105,9 @@ func main() {
 			log.Fatal(e)
 		}
 		config := &server.Config{Conn: obfs.WrapPacketConn(c, o),
-			TLSConfig:             server.TLSConfig{Certificates: []tls.Certificate{cert}},
-			QUICConfig:            server.QUICConfig{DisablePathMTUDiscovery: config.QUIC.DisablePathMTUDiscovery},
+			TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}},
+			QUICConfig: server.QUICConfig{DisablePathMTUDiscovery: config.QUIC.DisablePathMTUDiscovery,
+				MaxIdleTimeout: 60 * time.Second, KeepAlivePeriod: 5 * time.Second},
 			IgnoreClientBandwidth: true, Authenticator: authenticator{*helper, *db, port},
 			MasqHandler: http.NotFoundHandler()}
 		config.AuthenticatedOutbound = func(ctx context.Context, id string, addr func() net.Addr, close func(), base server.Outbound) server.Outbound {

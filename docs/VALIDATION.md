@@ -8,4 +8,10 @@ L’initialisation du panneau est vérifiée sur une base temporaire créée par
 
 Les études et snapshots de maintenance spécifiques à l’ancien serveur restent dans le workspace privé ; seuls leurs résultats applicables sont repris ici. Les anciens scripts d’authentification, de shaping noyau et les déploiements ponctuels ont été remplacés par l’état actuel, pour éviter de réintroduire les erreurs corrigées.
 
-Les tests de fermeture UDP ont révélé une course sur le marqueur de timeout du code de base. Le dépôt utilise désormais un booléen atomique ; cette correction et la configuration portable ne sont pas encore déployées sur le serveur source. Les certificats des tests de tunnel sont générés en mémoire et ne sont pas versionnés.
+Les tests de fermeture UDP ont révélé une course sur le marqueur de timeout du code de base. Le dépôt utilise désormais un booléen atomique ; La configuration portable reste distincte de la configuration du serveur source. Les certificats des tests de tunnel sont générés en mémoire et ne sont pas versionnés.
+
+## Stabilité QUIC
+
+Le serveur natif envoie désormais un maintien QUIC toutes les cinq secondes, avec un délai maximal d’inactivité côté serveur de 60 secondes. Le délai effectif reste négocié avec le client ; la cadence de maintien est adaptée par la bibliothèque. Le test `TestServerKeepsIdleClientConnected` reproduit la fermeture d’un client sans maintien puis démontre la survie de la même connexion lorsque le serveur le fournit. Ces paquets de contrôle ne modifient pas les plafonds de charge utile Standard/Premium. Une interruption réelle du réseau reste susceptible de couper un tunnel.
+
+Les journaux de fermeture indiquent compte authentifié, adresse distante et durée pour distinguer inactivité et incidents réseau. Aucun mot de passe ou contenu n’y est ajouté. Les tests ne démontrent pas la correction des plaintes Android sur tous les opérateurs ; celle-ci nécessite une vérification client après déploiement.
