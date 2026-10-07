@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sync"
 	"syscall"
 	"time"
 
@@ -63,6 +64,7 @@ func (a authenticator) Authenticate(addr net.Addr, auth string, _ uint64) (bool,
 	var out struct {
 		ID     string `json:"id"`
 		OK     bool   `json:"ok"`
+		Rate   int    `json:"rate"`
 		Reason string `json:"reason"`
 	}
 	e := helperCall(a.helper, a.db, map[string]interface{}{"addr": addr.String(), "auth": auth, "server_port": a.port}, &out)
@@ -85,6 +87,16 @@ func (a authenticator) Authenticate(addr net.Addr, auth string, _ uint64) (bool,
 			if _, _, err := qos.ParseID(out.ID); err != nil {
 				reason = "invalid_helper_response"
 			} else {
+				if out.Rate <= 0 {
+					a.manager.RecordAuth("invalid_helper_response")
+					return false, ""
+				}
+				if out.Rate > 0 {
+					if e := a.manager.SetAccountRate(out.ID, out.Rate); e != nil {
+						a.manager.RecordAuth("invalid_helper_response")
+						return false, ""
+					}
+				}
 				a.manager.RecordAuth(reason)
 				return true, out.ID
 			}
@@ -97,6 +109,29 @@ func (a authenticator) Authenticate(addr net.Addr, auth string, _ uint64) (bool,
 	return false, ""
 }
 
+var policyReloadMutex sync.Mutex
+
+func reloadPolicy(manager *qos.Manager, helper, db string) error {
+	policyReloadMutex.Lock()
+	defer policyReloadMutex.Unlock()
+	var out struct {
+		OK       bool            `json:"ok"`
+		Allowed  map[string]bool `json:"allowed"`
+		Policies map[string]int  `json:"policies"`
+		Defaults qos.Rates       `json:"defaults"`
+	}
+	if err := helperCall(helper, db, map[string]interface{}{"check": true, "ids": manager.IDs()}, &out); err != nil {
+		return err
+	}
+	if !out.OK || out.Allowed == nil || out.Policies == nil {
+		return fmt.Errorf("invalid policy response")
+	}
+	if err := manager.ApplyPolicies(out.Defaults, out.Policies); err != nil {
+		return err
+	}
+	manager.RevokeExcept(out.Allowed)
+	return nil
+}
 func main() {
 	configPath := flag.String("config", "/etc/zivpn/config.json", "Existing certificate/listen configuration")
 	helper := flag.String("auth-helper", "/usr/local/sbin/zivpn-native-auth", "Root identity helper")
@@ -122,6 +157,9 @@ func main() {
 		log.Fatal("Cannot load existing TLS certificate")
 	}
 	manager := qos.NewManager()
+	if err := reloadPolicy(manager, *helper, *db); err != nil {
+		log.Fatal("Initial account policy unavailable")
+	}
 	var servers []server.Server
 	addresses := []string{config.Listen}
 	if *secondary != "" {
@@ -194,6 +232,19 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(manager.SecuritySnapshot())
 	})
+	mux.HandleFunc("/reload-policy", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "POST" {
+			w.WriteHeader(405)
+			return
+		}
+		if err := reloadPolicy(manager, *helper, *db); err != nil {
+			manager.RecordAuth("recheck_error")
+			w.WriteHeader(503)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(map[string]bool{"ok": true})
+	})
 	mux.HandleFunc("/kick", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "POST" {
 			w.WriteHeader(405)
@@ -229,24 +280,14 @@ func main() {
 			case <-ctx.Done():
 				return
 			case <-ticker.C:
-				ids := manager.IDs()
-				if len(ids) == 0 {
-					continue
-				}
-				var out struct {
-					Allowed map[string]bool `json:"allowed"`
-				}
-				e := helperCall(*helper, *db, map[string]interface{}{"check": true, "ids": ids}, &out)
-				if e != nil {
+				if err := reloadPolicy(manager, *helper, *db); err != nil {
 					manager.RecordAuth("recheck_error")
 					log.Print("Account recheck unavailable; retrying")
-					continue
 				}
-				manager.RevokeExcept(out.Allowed)
 			}
 		}
 	}()
-	fmt.Printf("Native ZIVPN QoS ready: %d listeners; Standard 500000 B/s per IP; Premium 4000000 B/s per account\n", len(servers))
+	fmt.Printf("Native ZIVPN QoS ready: %d listeners; Standard default 1000000 B/s per IP; Premium 4000000 B/s per account\n", len(servers))
 	<-ctx.Done()
 	for _, srv := range servers {
 		srv.Close()

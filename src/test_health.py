@@ -80,12 +80,12 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(len(nodes),2)
         g = {'PRIMARY_ADMIN_ID':7,'send_telegram':Mock(),'answer_callback':Mock(),'get_admin_ids':lambda:{7,8}}
         exec(compile(ast.Module(body=nodes,type_ignores=[]),'guard','exec'),g)
-        for command in ('/sante','/qualite'):
+        for command in ('/sante','/qualite','/add','/profil','/vitesse','/limit'):
             for chat,user,kind in ((8,8,'private'),(-100,7,'group'),(8,7,'private')):
                 g['send_telegram'].reset_mock()
                 g['handle_telegram_command'](chat,user,command,kind)
                 self.assertIn('réservée',g['send_telegram'].call_args.args[0])
-        for button in ('menu_health','menu_quality'):
+        for button in ('menu_health','menu_quality','account_create_standard','account_create_premium'):
             g['answer_callback'].reset_mock()
             g['handle_telegram_callback']({'id':'x','data':button,'from':{'id':8},'message':{'chat':{'id':8,'type':'private'}}})
             self.assertIn('réservé',g['answer_callback'].call_args.args[1])

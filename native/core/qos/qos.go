@@ -15,7 +15,7 @@ import (
 	"golang.org/x/time/rate"
 )
 
-const StandardRate = 500000
+const StandardRate = 1000000
 const PremiumRate = 4000000
 const Burst = 65536
 const Chunk = 16384
@@ -49,6 +49,9 @@ type bucket struct {
 	waitNS, waitCalls, delayedCalls uint64
 }
 type Manager struct {
+	defaults          Rates
+	policies          map[string]int
+	groupRates        map[string]int
 	security          *SecurityObserver
 	TransportRegistry *server.TransportRegistry
 	started           int64
@@ -75,6 +78,7 @@ type Session struct {
 	counter        Counter
 	lastPayload    int64
 	transport      *server.TransportStats
+	rateKey        string
 }
 
 func NewManager() *Manager {
@@ -82,7 +86,7 @@ func NewManager() *Manager {
 	if _, e := rand.Read(b); e != nil {
 		panic(e)
 	}
-	return &Manager{security: newSecurityObserver(), TransportRegistry: &server.TransportRegistry{}, started: time.Now().UnixMilli(), auth: map[string]uint64{}, epoch: hex.EncodeToString(b), buckets: map[string]*bucket{},
+	return &Manager{defaults: Rates{StandardRate, PremiumRate}, policies: map[string]int{}, groupRates: map[string]int{}, security: newSecurityObserver(), TransportRegistry: &server.TransportRegistry{}, started: time.Now().UnixMilli(), auth: map[string]uint64{}, epoch: hex.EncodeToString(b), buckets: map[string]*bucket{},
 		accounts: map[string]Counter{}, servers: map[int]Counter{}, sessions: map[string]*Session{}}
 }
 func ParseID(id string) (string, bool, error) {
@@ -112,20 +116,23 @@ func (m *Manager) Attach(ctx context.Context, id string, addr func() net.Addr, c
 		addr: addr, close: close, started: time.Now().UnixMilli(), transport: m.TransportRegistry.Lookup(ctx)}
 	m.mu.Lock()
 	m.sessions[s.sid] = s
+	m.refreshRatesLocked()
 	m.mu.Unlock()
 	go func() { <-ctx.Done(); m.finish(s) }()
 	return s
 }
 func (s *Session) limiter() *rate.Limiter {
 	key := s.bucketKey()
-	speed := StandardRate
-	if s.vip {
-		key = "P:" + s.email
-		speed = PremiumRate
-	}
 	m := s.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if s.rateKey != key {
+		m.refreshRatesLocked()
+	}
+	speed := m.groupRates[key]
+	if speed == 0 {
+		speed = m.accountRateLocked(s.id, s.vip)
+	}
 	b := m.buckets[key]
 	if b == nil {
 		m.bucketSequence++

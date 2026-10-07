@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 ZiVPN <-> 3X-UI Bidirectional Synchronization & Advanced Telegram Bot Master Daemon
-- Full dual-instance integration: Standard (UDP 5667 - 500 Ko/s) & VIP / Limited (UDP 5668 - 4 Mo/s)
+- Full dual-instance integration: Standard (UDP 5667 - 1 Mo/s) & VIP / Limited (UDP 5668 - 4 Mo/s)
 - Comprehensive Low-Level Admin: CRUD accounts, dynamic QoS limits, live conntrack telemetry,
   application breakdown, P2P/Torrent toggling, session kicking, root shell execution, system logs.
 - Interactive French Telegram Bot with rich inline buttons and instant mobile configs (.ziv / Base64).
@@ -11,6 +11,7 @@ import sqlite3
 import sys
 sys.path.append("/usr/local/lib")
 from zivpn_policy import ACCOUNT_QUERY, access_denial
+import zivpn_qos as qos_policy
 import zivpn_accounting
 import json
 import csv
@@ -338,58 +339,51 @@ def send_backup_file(chat_id):
 # ==========================================
 
 def generate_ziv_config(username, password, inbound_id):
-    is_vip = (inbound_id == 2)
+    with get_db() as conn:
+        row=conn.execute('SELECT tag FROM inbounds WHERE id=?',(inbound_id,)).fetchone()
+        if not row or row[0] not in qos_policy.PROFILES.values():
+            raise ValueError('Profil VPN introuvable.')
+        is_vip=row[0]==qos_policy.PREMIUM
+        speed=qos_policy.describe(conn,username,row[0])
     port = 5667 if native_qos_enabled() else (5668 if is_vip else 5667)
-    speed = "Plafonné à 4 Mo/s (32 Mbps)" if is_vip else "Standard (500 Ko/s / 4 Mbps)"
     # Android exports its own encrypted .ziv format; do not invent import codes.
     return {"port": port, "speed": speed, "username": username, "password": password}
 
-def add_account(username, password, speed_mo_s=None):
+def add_account(username, password, profile, speed_mo_s=None):
     username = username.strip()
     password = password.strip()
-    is_vip = False
-    if speed_mo_s is not None:
-        try:
-            sp = float(speed_mo_s)
-            if sp > 1.0:
-                is_vip = True
-        except ValueError:
-            if str(speed_mo_s).lower() in ("vip", "ltd", "limited", "dedie"):
-                is_vip = True
-    target_inbound = 2 if is_vip else 1
-
+    if profile not in ('standard', 'premium'):
+        raise ValueError('Choisissez explicitement standard ou premium.')
+    if not username or not password or len(username)>80 or not re.fullmatch(r'[A-Za-z0-9_.@-]+',username):
+        raise ValueError('Nom : lettres, chiffres, point, tiret, @ ou soulignement ; mot de passe requis.')
+    rate = qos_policy.speed_bytes(speed_mo_s) if speed_mo_s is not None else None
     conn = get_db()
     c = conn.cursor()
     now_ms = int(time.time() * 1000)
-
-    c.execute("SELECT id FROM clients WHERE email = ?", (username,))
-    existing = c.fetchone()
-    if existing:
-        client_id = existing[0]
-        c.execute("UPDATE clients SET password = ?, enable = 1, updated_at = ? WHERE id = ?", (password, now_ms, client_id))
-        c.execute("""
-            INSERT INTO client_traffics (inbound_id, enable, email, up, down, expiry_time, total)
-            VALUES (?, 1, ?, 0, 0, 0, 0)
-            ON CONFLICT(email) DO UPDATE SET inbound_id=excluded.inbound_id, enable=1
-        """, (target_inbound, username))
-        c.execute("UPDATE client_inbounds SET inbound_id = ? WHERE client_id = ?", (target_inbound, client_id))
-    else:
-        c.execute("""
-            INSERT INTO clients (email, password, enable, total_gb, expiry_time, created_at, updated_at)
-            VALUES (?, ?, 1, 0, 0, ?, ?)
-        """, (username, password, now_ms, now_ms))
-        client_id = c.lastrowid
-        c.execute("""
-            INSERT INTO client_traffics (inbound_id, enable, email, up, down, expiry_time, total)
-            VALUES (?, 1, ?, 0, 0, 0, 0)
-        """, (target_inbound, username))
-        c.execute("""
-            INSERT OR IGNORE INTO client_inbounds (client_id, inbound_id, created_at)
-            VALUES (?, ?, ?)
-        """, (client_id, target_inbound, now_ms))
-
-    conn.commit()
-    conn.close()
+    try:
+        conn.execute('BEGIN IMMEDIATE')
+        qos_policy.ensure_schema(conn)
+        inbound = conn.execute('SELECT id FROM inbounds WHERE tag=?', (qos_policy.PROFILES[profile],)).fetchone()
+        if not inbound:
+            raise ValueError('Profil non configuré dans 3X-UI.')
+        target_inbound = inbound[0]
+        if conn.execute('SELECT 1 FROM clients WHERE email=?', (username,)).fetchone():
+            raise ValueError('Ce compte existe déjà. Utilisez /profil ou /vitesse pour le modifier.')
+        if conn.execute('SELECT 1 FROM clients WHERE password=?', (password,)).fetchone():
+            raise ValueError('Ce mot de passe est déjà utilisé ; choisissez-en un autre.')
+        conn.execute('INSERT INTO clients (email,password,enable,total_gb,expiry_time,created_at,updated_at) VALUES (?,?,1,0,0,?,?)', (username,password,now_ms,now_ms))
+        client_id=conn.execute('SELECT id FROM clients WHERE email=?',(username,)).fetchone()[0]
+        conn.execute('INSERT INTO client_traffics (inbound_id,enable,email,up,down,expiry_time,total) VALUES (?,1,?,0,0,0,0)', (target_inbound,username))
+        conn.execute('INSERT INTO client_inbounds (client_id,inbound_id,created_at) VALUES (?,?,?)', (client_id,target_inbound,now_ms))
+        conn.execute('DELETE FROM zivpn_qos_accounts WHERE email=?', (username,))
+        if rate is not None:
+            conn.execute('INSERT INTO zivpn_qos_accounts VALUES (?,?)',(username,rate))
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
     # Sync clients.csv
     csv_rows = []
@@ -411,8 +405,14 @@ def add_account(username, password, speed_mo_s=None):
             writer.writerow([u, p])
 
     # Refresh daemons
-    sync_accounts()
-    return generate_ziv_config(username, password, target_inbound)
+    pending=False
+    try:
+        sync_accounts()
+    except (OSError,ValueError,KeyError,TypeError):
+        pending=True
+    result=generate_ziv_config(username, password, target_inbound)
+    result["policy_pending"]=pending
+    return result
 
 def delete_account(username):
     conn = get_db()
@@ -423,6 +423,8 @@ def delete_account(username):
         conn.close()
         return False, f"❗ Compte `{username}` introuvable dans 3X-UI."
     client_id, pwd = row[0], row[1]
+    qos_policy.ensure_schema(conn)
+    c.execute("DELETE FROM zivpn_qos_accounts WHERE email=?", (username,))
     c.execute("DELETE FROM clients WHERE id = ?", (client_id,))
     c.execute("DELETE FROM client_traffics WHERE email = ?", (username,))
     c.execute("DELETE FROM client_inbounds WHERE client_id = ?", (client_id,))
@@ -526,8 +528,18 @@ def kick_client(target):
 
 def set_qos_limit(target, speed_mo_s):
     if native_qos_enabled():
-        return False, ("Les offres sont fixées à 4 Mo/s par compte Premium et 500 Ko/s par IP Standard. "
-                       "Le réglage de plafonds personnalisés n’est pas disponible actuellement.")
+        try:
+            with get_db() as conn:
+                message = qos_policy.set_speed(conn,target,speed_mo_s,global_default=target.lower() in ('standard','premium','vip'))
+            try:
+                sync_accounts()
+            except (OSError,ValueError,KeyError,TypeError):
+                return False, "Réglage enregistré ; application à chaud en attente (réessai sous 15 s)."
+            return True, message + "\nAppliqué aux connexions ouvertes ; montant + descendant cumulés."
+        except (ValueError, sqlite3.Error) as error:
+            return False, str(error) if isinstance(error,ValueError) else 'Erreur SQLite ; réglage non confirmé.'
+        except (OSError,KeyError,TypeError):
+            return False, 'Réglage enregistré ; application à chaud indisponible. Réessai automatique sous 15 s.'
     try:
         speed_float = float(speed_mo_s)
         mbps = max(1, int(speed_float * 8))
@@ -558,6 +570,28 @@ def set_qos_limit(target, speed_mo_s):
             return False, f"❌ Erreur QoS Standard : {e}"
     else:
         return False, f"Cible `{target}` non reconnue. Utilisez `vip` ou `standard`."
+
+def configure_account(username, profile=None, speed=None):
+    try:
+        with get_db() as conn:
+            if profile is not None:
+                message = qos_policy.set_profile(conn, username, profile, speed)
+            elif speed == 'defaut':
+                qos_policy.ensure_schema(conn)
+                row=conn.execute('SELECT ib.tag FROM client_traffics ct JOIN inbounds ib ON ib.id=ct.inbound_id WHERE ct.email=?',(username,)).fetchone()
+                if not row or row[0] not in qos_policy.PROFILES.values():
+                    raise ValueError('Compte VPN introuvable.')
+                conn.execute('DELETE FROM zivpn_qos_accounts WHERE email=?',(username,))
+                message=qos_policy.describe(conn,username,row[0])
+            else:
+                message = qos_policy.set_speed(conn, username, speed)
+        try:
+            sync_accounts()
+        except (OSError,ValueError,KeyError,TypeError):
+            return "Réglage enregistré ; application à chaud en attente (réessai sous 15 s)."
+        return message + ('\nProfil changé : reconnectez ce compte ; les autres comptes restent connectés.' if profile else '\nAppliqué à chaud aux connexions ouvertes.')
+    except (OSError,KeyError,TypeError):
+        return 'Réglage enregistré ; application à chaud en attente (réessai sous 15 s).'
 
 def p2p_toggle(action="status"):
     action = action.lower().strip()
@@ -695,7 +729,7 @@ def get_back_keyboard(refresh_action=None):
 def get_qos_keyboard():
     if native_qos_enabled():
         keyboard = get_back_keyboard('menu_qos')
-        keyboard['inline_keyboard'].insert(0, [{'text': 'Plafonds fixes : modification indisponible', 'disabled': {}}])
+        keyboard['inline_keyboard'].insert(0, [{'text': 'Réglages des comptes', 'callback_data':'menu_accounts'}])
         return keyboard
     return {
         "inline_keyboard": [
@@ -721,6 +755,8 @@ def get_p2p_keyboard():
 def get_accounts_keyboard():
     return {
         "inline_keyboard": [
+            [{"text":"Créer Standard (par IP)","callback_data":"account_create_standard"},
+             {"text":"Créer Premium (par compte)","callback_data":"account_create_premium"}],
             [
                 {"text": "🔄 Actualiser", "callback_data": "menu_accounts"},
                 {"text": "🔙 Menu Principal", "callback_data": "menu_main"}
@@ -733,13 +769,15 @@ def build_main_menu_text():
     metrics = get_server_metrics()
     z_icon = "🟢" if metrics["zivpn"] == "active" else "🔴"
     x_icon = "🟢" if metrics["xui"] == "active" else "🔴"
+    with get_db() as policy_db:
+        defaults=qos_policy.defaults(policy_db)
 
     return (
         "🚀 *Panneau d'Administration ZiVPN Master*\n"
         "Contrôle automatique et transparent du serveur ZiVPN.\n\n"
         f"• *ZiVPN Server UDP (Port 5667) :* {z_icon} `{metrics['zivpn']}`\n"
-        f"• *Premium :* ⭐ `4 Mo/s partagés par compte`\n"
-        f"• *Standard :* 🔹 `500 Ko/s partagés par IP`\n"
+        f"• *Premium :* ⭐ `défaut {defaults['premium']/1000000:g} Mo/s par compte, personnalisable`\n"
+        f"• *Standard :* 🔹 `défaut {defaults['standard']/1000000:g} Mo/s par IP, personnalisable`\n"
         f"• *3X-UI Panel (Port 2053) :* {x_icon} `{metrics['xui']}`\n"
         f"• *Flux UDP observés :* `{len(live)} socket(s)`\n"
         f"• *Uptime Serveur :* `{metrics['uptime']}`\n\n"
@@ -759,7 +797,7 @@ def build_status_text():
         f"🧠 *Mémoire RAM :* `{m['ram']}`\n"
         f"💾 *Espace Disque :* `{m['disk']}`\n\n"
         "🔧 *Services Noyau & Daemons :*\n"
-        f"• *ZiVPN Standard (5667 - 500Ko/s) :* {z_icon} `{m['zivpn']}`\n"
+        f"• *ZiVPN UDP (5667, plafonds configurables) :* {z_icon} `{m['zivpn']}`\n"
         f"• *Premium (port 5667, compatibilité 5668) :* {zl_icon} `{m['zivpn_limited']}`\n"
         f"• *3X-UI Web (Port 2053) :* {x_icon} `{m['xui']}`\n"
         f"• *Daemon Synchro & Bot :* 🟢 `actif`\n\n"
@@ -917,14 +955,17 @@ def build_qos_status_text():
                 premium[row['email']] += 1
             else:
                 standard_ips.add(row['ip'])
-        lines = ['⚙️ Limites de débit par identité authentifiée\n',
-                 '⭐ Premium : 4 Mo/s au total par compte, toutes IP et connexions confondues.',
-                 '🔹 Standard : 500 Ko/s au total par IP publique, tous appareils confondus.',
-                 'TCP et UDP partagent le plafond ; montant et descendant cumulés.\n',
-                 f'IP Standard connectées : {len(standard_ips)}',
-                 f'Comptes Premium connectés : {len(premium)}']
-        for email, count in sorted(premium.items())[:12]:
-            lines.append(f'• {email[:80]} : {count} connexion(s), 4 Mo/s partagés')
+        with get_db() as conn:
+            rates=qos_policy.defaults(conn)
+        lines = ['Plafonds de débit configurables',
+                 f'Standard : défaut {rates["standard"]/1000000:g} Mo/s par IP publique.',
+                 f'Premium : défaut {rates["premium"]/1000000:g} Mo/s par compte.',
+                 'Montant et descendant cumulés ; TCP et UDP partagent le plafond.',
+                 'Même IP Standard, vitesses différentes : le plafond le plus bas des comptes connectés est partagé.',
+                 f'IP Standard : {len(standard_ips)} ; comptes Premium : {len(premium)}.',
+                 '/vitesse <nom> <Mo/s|defaut> ; /profil <nom> <standard|premium> [Mo/s]',
+                 '/limit standard|premium <Mo/s> : défaut sans modifier les comptes personnalisés.',
+                 '/qualite : mesurer le plafond effectivement appliqué.']
         return '\n'.join(lines)
     try:
         out_tc = subprocess.check_output(["tc", "-s", "class", "show", "dev", "ifb0"], timeout=10).decode()
@@ -968,7 +1009,7 @@ def build_accounts_list_text():
     conn = get_db()
     c = conn.cursor()
     c.execute("""
-        SELECT c.id, c.email, c.password, c.enable, ct.up, ct.down, ct.inbound_id, ib.remark
+        SELECT c.id, c.email, c.password, c.enable, ct.up, ct.down, ct.inbound_id, ib.remark, ib.tag AS inbound_tag
         FROM clients c
         LEFT JOIN client_traffics ct ON c.email = ct.email
         LEFT JOIN inbounds ib ON ct.inbound_id = ib.id
@@ -984,18 +1025,19 @@ def build_accounts_list_text():
         for r in rows:
             status = "🟢" if r["enable"] == 1 else "🔴 (Bloqué)"
             if native_qos_enabled():
-                ib_type = "⭐ Premium 4 Mo/s par compte (5667)" if r["inbound_id"] == 2 else "🔹 Standard 500 Ko/s par IP (5667)"
+                with get_db() as policy_db:
+                    ib_type = qos_policy.describe(policy_db,r["email"],r["inbound_tag"])
             else:
                 ib_type = "⭐ VIP 4Mo/s (Port 5668)" if r["inbound_id"] == 2 else "🔹 Standard 500Ko/s (Port 5667)"
             conso = format_bytes((r["up"] or 0) + (r["down"] or 0))
             lines.append(f"• *{r['email']}* {status}\n   - Profil : `{ib_type}`\n   - Conso : `{conso}` | MDP : `{r['password']}`")
 
     lines.append("\n🛠 *Commandes Rapides Disponibles :*")
-    lines.append("• `/add <nom> <mdp> [vitesse]` : Créer un compte")
+    lines.append("• `/add <nom> <mdp> <standard|premium> [Mo/s]` : Créer un compte")
     lines.append("• `/del <nom>` : Supprimer définitivement")
     lines.append("• `/block <nom>` / `/unblock <nom>` : Bloquer/Débloquer")
-    lines.append("• `/limit <nom> <Mo_s>` : Changer vitesse")
-    lines.append("• `/config <nom>` : Exporter fichier .ziv")
+    lines.append("• `/vitesse <nom> <Mo/s|defaut>` : Changer vitesse\n/profil <nom> <standard|premium> [Mo/s] : Changer profil")
+    lines.append("• `/config <nom>` : Paramètres Android")
     return "\n".join(lines)
 
 def build_conso_text():
@@ -1063,9 +1105,10 @@ def build_usage_text(email):
     pwd = row["password"] or ""
     masked_pwd = (pwd[:4] + "..." + pwd[-4:]) if len(pwd) > 8 else pwd
 
-    is_ltd = (row["inbound_tag"] == "inbound-zivpn-limited" or row["inbound_id"] == 2)
+    is_ltd = row["inbound_tag"] == qos_policy.PREMIUM
     server_port = "5667 UDP (commun)" if native_qos_enabled() else ("5668 UDP (VIP)" if is_ltd else "5667 UDP (Standard)")
-    speed_ceiling = "⭐ 4 Mo/s partagés par compte" if is_ltd else "🔹 500 Ko/s partagés par IP"
+    with get_db() as policy_db:
+        speed_ceiling = qos_policy.describe(policy_db,email,row["inbound_tag"])
 
     return (
         f"🔍 *Fiche Client : `{email}`*\n\n"
@@ -1087,7 +1130,7 @@ def get_account_config_text(username):
     conn = get_db()
     c = conn.cursor()
     c.execute("""
-        SELECT c.email, c.password, ct.inbound_id, ib.remark
+        SELECT c.email, c.password, ct.inbound_id, ib.remark, ib.tag
         FROM clients c
         JOIN client_traffics ct ON c.email = ct.email
         LEFT JOIN inbounds ib ON ct.inbound_id = ib.id
@@ -1100,8 +1143,9 @@ def get_account_config_text(username):
         return f"❗ Compte `{username}` introuvable dans 3X-UI."
 
     inbound_id = row["inbound_id"]
-    is_vip = inbound_id == 2
-    speed_tag = "⭐ VIP (4 Mo/s / 32 Mbps)" if is_vip else "🔹 Standard (500 Ko/s / 4 Mbps)"
+    is_vip = row["tag"] == qos_policy.PREMIUM
+    with get_db() as conn:
+        speed_tag = qos_policy.describe(conn,username,row["tag"])
 
     return (
         f"📱 *Configuration Client ZiVPN : `{username}`*\n\n"
@@ -1111,7 +1155,8 @@ def get_account_config_text(username):
         f"3. Mot de passe : `{row['password']}`\n"
         f"4. Cliquez sur **Connecter**\n\n"
         f"• *Profil alloué :* {speed_tag}\n"
-        f"• *Gestion du débit :* 100% automatique côté serveur"
+        f"• *Gestion du débit :* montant + descendant cumulés.\n"
+        + ("Toutes les IP de ce compte partagent son plafond." if is_vip else "Si plusieurs comptes Standard partagent cette IP, le plafond le plus bas des comptes connectés s’applique.")
     )
 
 def build_help_text():
@@ -1134,7 +1179,7 @@ def build_help_text():
         "• `/usage <nom>` : Fiche détaillée d'un compte\n\n"
         "👤 *Gestion des Comptes (CRUD) :*\n"
         "• `/accounts` ou `/list` : Liste des comptes enregistrés\n"
-        "• `/add <nom> <mdp> [vitesse]` : Créer un compte et ses paramètres Android\n"
+        "• `/add <nom> <mdp> <standard|premium> [Mo/s]` : Créer un compte et ses paramètres Android\n"
         "• `/del <nom>` : Supprimer un compte et déconnecter ses sessions\n"
         "• `/block <nom>` / `/unblock <nom>` : Bloquer/Débloquer l'accès\n"
         "• `/config <nom>` : Afficher les paramètres à saisir dans Android\n\n"
@@ -1152,8 +1197,8 @@ def build_help_text():
     )
     if native_qos_enabled():
         text = text.replace("Flux bruts conntrack (IPs, paquets, octets)", "Sessions QUIC confirmées et octets transférés")
-        text = text.replace("État Traffic Control `ifb0`, files d'attente, baux ipset", "Premium : 4 Mo/s par compte ; Standard : 500 Ko/s par IP")
-        text = text.replace("• `/limit <vip|standard|nom> <Mo_s>` : Régler le plafond de vitesse en direct\n", "")
+        text = text.replace("État Traffic Control `ifb0`, files d'attente, baux ipset", "Premium : 4 Mo/s par compte ; Standard : 1 Mo/s par IP")
+        text += "\n/vitesse <nom> <Mo/s|defaut> : plafond du compte\n/profil <nom> <standard|premium> [Mo/s] : changer le profil\n/limit standard|premium <Mo/s> : changer le défaut de l’offre"
         text = text.replace("sessions conntrack", "sessions QUIC")
     return text
 
@@ -1169,11 +1214,15 @@ def build_inbound_text():
     if not rows:
         return "❗ Inbounds ZiVPN introuvables dans 3X-UI."
 
+    with get_db() as policy_db:
+        defaults=qos_policy.defaults(policy_db)
     lines = ["🌐 *Serveurs Inbound ZiVPN (3X-UI)*\n"]
     for row in rows:
         is_ltd = (row["tag"] == "inbound-zivpn-limited")
         listen_p = "5667 UDP (commun)" if native_qos_enabled() else ("5668 UDP (VIP)" if is_ltd else "5667 UDP (Standard)")
-        ceiling = "⭐ Plafond 4 Mo/s (32 Mbps)" if is_ltd else "🔹 Plafond 500 Ko/s (4 Mbps)"
+        profile="premium" if is_ltd else "standard"
+        scope="par compte" if is_ltd else "par IP publique"
+        ceiling=f"Défaut {defaults[profile]/1000000:g} Mo/s {scope}, personnalisable"
         lines.append(
             f"• *{row['remark']}*\n"
             f"   - Port écoute : `{listen_p}` (mappé 3X-UI `{row['port']}`)\n"
@@ -1232,7 +1281,7 @@ def handle_telegram_command(chat_id, user_id, text, chat_type=None):
     if force_text:
         args = args[:-1]
 
-    if cmd in ("/exec", "/securite", "/destinations", "/dns", "/apps", "/sante", "/qualite") and not (
+    if cmd in ("/exec", "/securite", "/destinations", "/dns", "/apps", "/sante", "/qualite", "/add", "/profil", "/vitesse", "/limit") and not (
         user_id == PRIMARY_ADMIN_ID
         and chat_type == "private"
         and chat_id == PRIMARY_ADMIN_ID
@@ -1320,19 +1369,28 @@ def handle_telegram_command(chat_id, user_id, text, chat_type=None):
         else:
             ok, msg = set_qos_limit(args[0], args[1])
             send_telegram(msg, chat_id=chat_id, reply_markup=get_qos_keyboard())
+    elif cmd in ("/vitesse", "/profil"):
+        try:
+            if (cmd=="/vitesse" and len(args)!=2) or (cmd=="/profil" and len(args) not in (2,3)):
+                raise ValueError('Syntaxe : /vitesse <nom> <Mo/s|defaut> ou /profil <nom> <standard|premium> [Mo/s]')
+            report = configure_account(args[0], profile=args[1].lower() if cmd=="/profil" else None,
+                                       speed=(args[2] if len(args)==3 else None) if cmd=="/profil" else args[1])
+            send_telegram(report, chat_id=chat_id)
+        except (ValueError,sqlite3.Error) as error:
+            send_telegram(str(error) if isinstance(error,ValueError) else 'Erreur SQLite ; réglage non confirmé.',chat_id=chat_id)
     elif cmd == "/add":
-        if not args:
-            send_telegram("⚠️ *Syntaxe :* `/add <nom> [mdp] [vitesse_Mo_s]`\nExemples :\n• `/add Jean monpass 4` (Compte VIP 4 Mo/s)\n• `/add Paul pass123` (Compte Standard 500 Ko/s)", chat_id=chat_id)
+        if len(args) not in (3,4) or args[2].lower() not in ('standard','premium'):
+            send_telegram('Syntaxe : /add <nom> <mdp> <standard|premium> [Mo/s]\nExemples : /add Jean motdepasse standard 1 ; /add Paul autresecret premium 4',chat_id=chat_id)
         else:
-            username = args[0]
-            password = args[1] if len(args) >= 2 else username
-            speed = args[2] if len(args) >= 3 else None
-            ziv = add_account(username, password, speed)
-            send_telegram(
-                f"✅ Compte `{username}` créé avec succès !\n\n" + get_account_config_text(username),
-                chat_id=chat_id,
-                reply_markup=get_accounts_keyboard()
-            )
+            try:
+                created=add_account(args[0],args[1],args[2].lower(),args[3] if len(args)==4 else None)
+                if created.get("policy_pending"):
+                    send_telegram("Compte enregistré ; application du plafond en attente (réessai sous 15 s).",chat_id=chat_id)
+                send_telegram(f'Compte {args[0]} créé.\n'+get_account_config_text(args[0]),chat_id=chat_id,reply_markup=get_accounts_keyboard())
+            except (ValueError,sqlite3.Error) as error:
+                send_telegram(str(error) if isinstance(error,ValueError) else 'Création non confirmée ; vérifiez /accounts avant de réessayer.',chat_id=chat_id)
+            except (OSError,KeyError,TypeError):
+                send_telegram('Compte enregistré ; synchronisation en attente. Vérifiez /accounts avant de réessayer.',chat_id=chat_id)
     elif cmd == "/del":
         if not args:
             send_telegram("⚠️ *Syntaxe :* `/del <nom>`\nExemple : `/del client-002`", chat_id=chat_id)
@@ -1400,7 +1458,7 @@ def handle_telegram_callback(callback):
     message_id = message.get("message_id")
     user_id = callback.get("from", {}).get("id")
 
-    if data in ("menu_apps", "menu_health", "menu_quality") and not (user_id == PRIMARY_ADMIN_ID and chat_id == PRIMARY_ADMIN_ID and message.get("chat", {}).get("type") == "private"):
+    if data in ("menu_apps", "menu_health", "menu_quality", "account_create_standard", "account_create_premium") and not (user_id == PRIMARY_ADMIN_ID and chat_id == PRIMARY_ADMIN_ID and message.get("chat", {}).get("type") == "private"):
         answer_callback(callback_id, "Rapport réservé à l’administrateur principal en privé.")
         return
     admin_ids = get_admin_ids()
@@ -1410,7 +1468,10 @@ def handle_telegram_callback(callback):
 
     answer_callback(callback_id)
 
-    if data in ("menu_health", "menu_quality"):
+    if data in ('account_create_standard','account_create_premium'):
+        profile=data.rsplit('_',1)[1]
+        send_telegram(f'Création {profile} : /add <nom> <mdp> {profile} [Mo/s]\n'+('Plafond partagé par IP publique.' if profile=='standard' else 'Plafond partagé par compte, toutes IP confondues.')+'\nModifier : /vitesse <nom> <Mo/s> ; /profil <nom> <standard|premium> [Mo/s]',chat_id=chat_id)
+    elif data in ("menu_health", "menu_quality"):
         handle_telegram_command(chat_id, user_id, "/sante" if data == "menu_health" else "/qualite", chat_type=message.get("chat", {}).get("type"))
     elif data == "menu_diagnostic":
         result = DIAGNOSTICS.start(chat_id, user_id, message.get("chat", {}).get("type"))
@@ -1476,7 +1537,7 @@ def dispatch_telegram_update(update):
     words = msg.get('text', '').split()
     command = words[0].split('@')[0].lower() if words else ''
     callback = update.get('callback_query', {}).get('data', '')
-    mutations = {'/add', '/del', '/block', '/unblock', '/kick', '/limit', '/exec', '/restart', '/p2p'}
+    mutations = {'/add', '/del', '/block', '/unblock', '/kick', '/limit', '/vitesse', '/profil', '/exec', '/restart', '/p2p'}
     if command in mutations or callback in {'menu_restart', 'p2p_on', 'p2p_off', 'qos_flush_ips'}:
         with MUTATION_LOCK:
             return execute_telegram_update(update)
@@ -1613,6 +1674,8 @@ def sync_accounts():
     # Native authentication reads 3X-UI on every login and rechecks active
     # identities periodically, without restarting other users' tunnels.
     if native_qos_enabled():
+        import zivpn_native_accounting as native
+        native.request('/reload-policy', {})
         return
     conn = get_db()
     c = conn.cursor()
@@ -1747,6 +1810,9 @@ DIAGNOSTICS = Diagnostics(diagnostic_api_call, send_telegram,
 
 def main():
     print("[ZiVPN Master <-> 3X-UI Sync & Low-Level Admin Telegram Daemon Started]")
+
+    with get_db() as conn:
+        qos_policy.ensure_schema(conn)
 
     # Start Telegram bot receiver thread
     t = threading.Thread(target=telegram_bot_worker, daemon=True)

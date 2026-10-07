@@ -32,6 +32,7 @@ type BucketView struct {
 	DelayedCalls uint64 `json:"delayed_calls"`
 }
 type HealthView struct {
+	Defaults      Rates                 `json:"defaults"`
 	Epoch         string                `json:"epoch"`
 	StartedMS     int64                 `json:"started_ms"`
 	ObservedMS    int64                 `json:"observed_ms"`
@@ -59,6 +60,7 @@ func (m *Manager) finish(s *Session) {
 		return
 	}
 	delete(m.sessions, s.sid)
+	m.refreshRatesLocked()
 	m.closeSequence++
 	now := time.Now().UnixMilli()
 	v := CloseView{Sequence: m.closeSequence, ClosedMS: now, Email: s.email, IP: host(s.addr()),
@@ -71,7 +73,7 @@ func (m *Manager) Health() HealthView {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := time.Now().UnixMilli()
-	out := HealthView{Epoch: m.epoch, StartedMS: m.started, ObservedMS: now,
+	out := HealthView{Defaults: m.defaults, Epoch: m.epoch, StartedMS: m.started, ObservedMS: now,
 		Auth: map[string]uint64{}, Closes: []CloseView{}, CloseSequence: m.closeSequence, Buckets: map[string]BucketView{}}
 	for k, v := range m.auth {
 		out.Auth[k] = v
@@ -90,20 +92,14 @@ func (m *Manager) Health() HealthView {
 		if time.Since(b.last) > time.Minute {
 			continue
 		}
-		speed := StandardRate
-		if len(k) > 2 && k[:2] == "P:" {
-			speed = PremiumRate
-		}
+		speed := int(b.limiter.Limit())
 		out.Buckets[k] = BucketView{Generation: b.generation, Key: k, Limit: speed, Counter: b.counter, WaitNS: b.waitNS, WaitCalls: b.waitCalls, DelayedCalls: b.delayedCalls}
 	}
 	for _, s := range m.sessions {
 		k := s.bucketKey()
 		v, exists := out.Buckets[k]
 		if !exists {
-			speed := StandardRate
-			if s.vip {
-				speed = PremiumRate
-			}
+			speed := m.groupRates[k]
 			v = BucketView{Key: k, Limit: speed}
 		}
 		v.Sessions++

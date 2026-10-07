@@ -5,8 +5,9 @@ Serveur UDP compatible avec l’application Android ZiVPN, administration 3X-UI 
 ## Fonctionnement
 
 - Tous les comptes Android utilisent UDP **5667**. UDP 5668 sert à la compatibilité Premium.
-- Standard : **500 000 octets/s par adresse IP publique**, partagés entre les tunnels et comptes de cette IP.
-- Premium : **4 000 000 octets/s par compte**, partagés entre ses adresses et tunnels.
+- Standard : **1 000 000 octets/s par adresse IP publique par défaut**, partagés entre les tunnels et comptes de cette IP.
+- Premium : **4 000 000 octets/s par compte par défaut**, partagés entre ses adresses et tunnels.
+- Le profil est choisi explicitement à la création ; `/profil` le modifie et `/vitesse` personnalise le plafond. Si plusieurs comptes Standard partagent une IP, le plafond le plus bas des comptes connectés s’applique.
 - Les plafonds combinent émission et réception. Les quotas et dates d’expiration viennent de 3X-UI.
 - Les sessions et compteurs sont exposés uniquement via un socket Unix privé.
 - Le bot propose rapports, gestion des comptes, diagnostics annulables et suivi `/taches`.

@@ -262,6 +262,48 @@ func TestTunneledSharedCeilingsAndMixedIP(t *testing.T) {
 			t.Fatalf("missing live transport metrics: %+v", view)
 		}
 	}
+	if e := m.ApplyPolicies(Rates{StandardRate, PremiumRate}, map[string]int{"P:vip-one": 2000000, "S:free-one": 250000, "S:free-two": 500000}); e != nil {
+		t.Fatal(e)
+	}
+	var customWG sync.WaitGroup
+	for _, spec := range []struct {
+		index int
+		speed float64
+	}{{0, 2000000}, {3, 250000}} {
+		spec := spec
+		customWG.Add(1)
+		go func() {
+			defer customWG.Done()
+			stream, err := clients[spec.index].TCP(target.Addr().String())
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			defer stream.Close()
+			start := time.Now()
+			stream.SetReadDeadline(start.Add(3 * time.Second))
+			count := 0
+			buf := make([]byte, 32768)
+			for {
+				n, err := stream.Read(buf)
+				if time.Since(start) >= time.Second {
+					count += n
+				}
+				if err != nil {
+					break
+				}
+			}
+			got := float64(count) / 2
+			t.Logf("custom live rate: %.0f B/s, ceiling %.0f", got, spec.speed)
+			if got < spec.speed*.8 || got > spec.speed*1.1 {
+				t.Errorf("custom rate outside expected range: %.0f", got)
+			}
+		}()
+	}
+	customWG.Wait()
+	if e := m.ApplyPolicies(Rates{StandardRate, PremiumRate}, map[string]int{}); e != nil {
+		t.Fatal(e)
+	}
 	// Both UDP forwarding and TCP share the same Session limiter in Wrap.
 	udp, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if e != nil {

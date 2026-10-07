@@ -7,6 +7,7 @@ import sys
 sys.path.insert(0, os.environ.get('ZIVPN_NATIVE_LIB', '/usr/local/lib'))
 from zivpn_policy import ACCOUNT_QUERY, access_denial, authenticate
 import time
+from zivpn_qos import account_rate, defaults
 
 
 def account_id(row):
@@ -26,7 +27,9 @@ def main():
                 rows = conn.execute(ACCOUNT_QUERY + ' WHERE c.email=?', (email,)).fetchall()
                 allowed[identity] = (len(rows) == 1 and account_id(rows[0]) == identity
                                      and access_denial(rows[0], now_ms) is None)
-        print(json.dumps({'allowed': allowed}))
+            policies = {account_id(row): account_rate(conn,row['email'],row['inbound_tag']) for row in conn.execute(ACCOUNT_QUERY).fetchall()}
+            rates = defaults(conn)
+        print(json.dumps({'ok': True, 'allowed': allowed, 'policies': policies, 'defaults': rates}))
         return 0
     port = int(request['server_port'])
     result = authenticate(request['addr'], request['auth'],
@@ -42,7 +45,7 @@ def main():
         if denial:
             print(json.dumps({'ok': False, 'reason': denial}))
         else:
-            print(json.dumps({'ok': True, 'reason': 'accepted', 'id': account_id(rows[0])}))
+            print(json.dumps({'ok': True, 'reason': 'accepted', 'id': account_id(rows[0]), 'rate': account_rate(conn,rows[0]['email'],rows[0]['inbound_tag'])}))
     return 0
 
 

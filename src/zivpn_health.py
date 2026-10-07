@@ -90,7 +90,7 @@ class Monitor:
             if health['epoch'] != snapshot['epoch']:
                 raise ValueError('Epoch changed during sample')
             data.update(native_available=True, epoch=health['epoch'], auth=health['auth'],
-                        native_started_ms=health['started_ms'], close_sequence=health['close_sequence'],
+                        defaults=health.get('defaults', {'standard':1000000,'premium':4000000}), native_started_ms=health['started_ms'], close_sequence=health['close_sequence'],
                         tunnels=len(snapshot['sessions']), ips=len({row['ip'] for row in snapshot['sessions'].values()}))
             data['kernel'] = kernel_counters(self.interface)
             if self.previous and self.previous[1]['epoch'] == health['epoch']:
@@ -197,7 +197,7 @@ class Monitor:
                   'Telegram entre mesures : '+(', '.join(f'{key}={value}' for key,value in telegram.items() if not key.endswith((':success', ':unchanged')) and value) or 'aucune erreur'),
                   f'Groupes à ≥90 % du plafond lors de la dernière mesure : {latest.get("saturated_buckets", "mesure en cours")}.',
                   f'Événements QUIC non récupérés : {sum(data.get("missing_close_events",0) for _,data in samples)}.',
-                  'Standard : 500 Ko/s par IP publique ; Premium : 4 Mo/s par compte, montant + descendant.',
+                  f'Défauts : Standard {latest.get("defaults", {}).get("standard",1000000)/1000000:g} Mo/s par IP ; Premium {latest.get("defaults", {}).get("premium",4000000)/1000000:g} Mo/s par compte ; personnalisations possibles.',
                   '/qualite : mesure de 5 s des plafonds et tunnels. Historique privé conservé 7 jours.']
         return PlainText('\n'.join(lines)[:3400])
 
@@ -225,5 +225,5 @@ def quality_report(native, wait=time.sleep, seconds=5):
         lines.append('Aucun groupe comparable sur cet intervalle ; reconnecté, inactif ou aucun trafic.')
     lines += ['≥90 % indique une proximité du plafond, pas une panne.',
               'Une IP publique mobile peut regrouper plusieurs utilisateurs ; le plafond Standard est alors partagé.',
-              'Les plafonds restent 500 Ko/s par IP et 4 Mo/s par compte Premium.']
+              'Plafonds personnalisables : Standard par IP ; Premium par compte. Même IP Standard : minimum des comptes connectés.']
     return PlainText('\n'.join(lines)[:3400])

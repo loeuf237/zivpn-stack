@@ -14,7 +14,7 @@ func TestStructuredAuthenticationResults(t *testing.T) {
 		name, body, reason string
 		allowed            bool
 	}{
-		{"accept", `printf '%s' '{"ok":true,"reason":"accepted","id":"P:fixture"}'`, "accepted", true},
+		{"accept", `printf '%s' '{"ok":true,"reason":"accepted","id":"P:fixture","rate":4000000}'`, "accepted", true},
 		{"refuse", `printf '%s' '{"ok":false,"reason":"expired"}'`, "expired", false},
 		{"sqlite", `printf '%s' '{"ok":false,"reason":"database_error"}'`, "database_error", false},
 		{"broken", `exit 1`, "helper_exit", false},
