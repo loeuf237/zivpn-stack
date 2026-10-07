@@ -43,8 +43,21 @@ Ouvrir un tunnel `ssh -L 2053:127.0.0.1:2053 utilisateur@serveur`, puis utiliser
 sudo python3 -c "import sqlite3; c=sqlite3.connect('/etc/x-ui/x-ui.db'); print(c.execute(\"SELECT value FROM settings WHERE key='webBasePath'\").fetchone()[0])"
 ```
 
-Dans Telegram, utiliser `/menu`, `/status`, `/diagnostic`, `/annuler` et `/taches`, puis créer un compte Standard et un Premium avec `/add` (voir `/help`). Configurer Android avec l’adresse du serveur et le mot de passe du compte. Le certificat est auto-signé pour la compatibilité existante : le client doit accepter ce mode. Vérifier navigation TCP et UDP, expiration, partage Standard par IP et partage Premium par compte avant de basculer des utilisateurs.
+Dans la conversation privée de l’administrateur principal, utiliser `/menu`, `/status`, `/diagnostic`, `/annuler` et `/taches`. Créer deux comptes de vérification avec des mots de passe uniques :
+
+```text
+/add essai_standard mot-de-passe-unique standard 1
+/add essai_premium autre-mot-de-passe premium 4
+/qualite
+/sante 24
+```
+
+La syntaxe est `/add <nom> <mot-de-passe> <standard|premium> [Mo/s]`. Sans vitesse, les valeurs initiales sont 1 Mo/s par IP publique pour Standard et 4 Mo/s par compte pour Premium. `/vitesse <nom> <Mo/s|defaut>` personnalise ou réinitialise le plafond ; `/profil <nom> <standard|premium> [Mo/s]` change le profil. `/limit standard <Mo/s>` et `/limit premium <Mo/s>` changent les valeurs par défaut, en conservant les plafonds personnalisés. Voir [la surveillance](OBSERVABILITY.md) pour les règles de partage et de reconnexion.
+
+Configurer Android avec l’adresse du serveur et le mot de passe du compte. Le certificat est auto-signé pour la compatibilité existante : le client doit accepter ce mode. Vérifier navigation TCP et UDP, expiration, partage Standard par IP et partage Premium par compte avant de basculer des utilisateurs.
 
 ## Migration privée
 
-La restauration des utilisateurs est distincte du déploiement du code. Faire une sauvegarde cohérente SQLite ; transférer la base et, si nécessaire, les certificats et secrets par un canal privé. Préserver les quotas et compteurs. Une migration de compteurs natifs nécessite un dernier échantillon avant l’arrêt du serveur source. Ne jamais restaurer une base pendant que le panneau ou le collecteur écrivent dedans. Cette restauration n’est pas automatisée par l’installateur neuf.
+La restauration des utilisateurs est distincte du déploiement du code. Faire une sauvegarde cohérente SQLite via son API de sauvegarde, en incluant les tables de plafonds `zivpn_qos_defaults` et `zivpn_qos_accounts` ; transférer la base et, si nécessaire, les certificats et secrets par un canal privé. Préserver les quotas et compteurs. Une migration de compteurs natifs nécessite un dernier échantillon avant l’arrêt du serveur source. Ne jamais restaurer une base pendant que le panneau ou le collecteur écrivent dedans. Cette restauration n’est pas automatisée par l’installateur neuf.
+
+Après restauration, vérifier les profils, les valeurs par défaut et les plafonds personnalisés dans le bot. Sur une ancienne base sans ces tables, les comptes héritent initialement des valeurs 1 Mo/s et 4 Mo/s ; le bot initialise les tables. Une mise à jour de production suit les [contrôles de mise à jour](OBSERVABILITY.md#contrôles-de-mise-à-jour), jamais l’installateur neuf.

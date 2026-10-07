@@ -4,7 +4,7 @@ Ce dépôt doit contenir uniquement sources, tests avec données fictives, modè
 
 `.gitignore` exclut ces fichiers usuels. `tools/secret_scan.py --staged` inspecte les blobs de l’index avant un commit ; le contrôle initial avec `--live` compare aussi les fichiers aux secrets du serveur courant sans afficher leurs valeurs. Ce contrôle ne remplace pas la revue des fichiers.
 
-Les secrets cibles résident sous `/etc/zivpn` et dans `/etc/x-ui/x-ui.db`, avec accès root. Le bot dispose de commandes administratives puissantes : `/add`, `/profil`, `/vitesse`, `/limit`, `/exec` et les rapports de destinations/DNS restent réservés à l’administrateur principal dans sa conversation privée. Conserver son compte Telegram protégé.
+Les secrets cibles résident sous `/etc/zivpn` et dans `/etc/x-ui/x-ui.db`, avec accès root. Le bot dispose de commandes administratives puissantes : `/add`, `/profil`, `/vitesse`, `/limit`, `/exec`, `/sante`, `/qualite` et les rapports de destinations/DNS restent réservés à l’administrateur principal dans sa conversation privée. Conserver son compte Telegram protégé.
 
 Le jeton se renouvelle par `sudo /usr/local/sbin/zivpn-set-telegram-token` avec saisie masquée. Les anciens jetons sauvegardés restent privés. Ne jamais passer un jeton ou un mot de passe dans une commande Git, un message d’issue ou la description d’un PR.
 
