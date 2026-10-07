@@ -46,6 +46,15 @@ class AccountPolicyTests(unittest.TestCase):
                                    required_tag=required_tag, db_path=self.db,
                                    now_ms=self.now if now is None else now)
 
+    def test_diagnostic_refusal_is_distinct_from_database_error(self):
+        self.assertEqual(policy.authenticate('203.0.113.1:1', 'unknown', db_path=self.db, diagnostic=True),
+                         {'ok': False, 'reason': 'invalid_credentials'})
+        with patch.object(policy.sqlite3, 'connect', side_effect=sqlite3.OperationalError('private details')):
+            self.assertEqual(policy.authenticate('203.0.113.1:1', 'fixture-secret', db_path=self.db, diagnostic=True),
+                             {'ok': False, 'reason': 'database_error'})
+        self.sql('UPDATE clients SET enable=0')
+        self.assertEqual(policy.authenticate('203.0.113.1:1', 'fixture-secret', db_path=self.db, diagnostic=True)['reason'], 'disabled')
+
     def test_unlimited_account_allowed(self):
         self.assertEqual(self.login(), "test-user")
 

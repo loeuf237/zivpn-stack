@@ -26,12 +26,14 @@ type Counter struct {
 }
 type SessionView struct {
 	Counter
-	Email           string `json:"email"`
-	IP              string `json:"ip"`
-	RemotePort      int    `json:"remote_port"`
-	Port            int    `json:"port"`
-	VIP             bool   `json:"vip"`
-	AuthenticatedMS int64  `json:"authenticated_ms"`
+	Email           string               `json:"email"`
+	IP              string               `json:"ip"`
+	RemotePort      int                  `json:"remote_port"`
+	Port            int                  `json:"port"`
+	VIP             bool                 `json:"vip"`
+	AuthenticatedMS int64                `json:"authenticated_ms"`
+	LastPayloadMS   int64                `json:"last_payload_ms"`
+	Transport       server.TransportView `json:"transport"`
 }
 type Snapshot struct {
 	Epoch    string                 `json:"epoch"`
@@ -40,17 +42,24 @@ type Snapshot struct {
 	Sessions map[string]SessionView `json:"sessions"`
 }
 type bucket struct {
-	limiter *rate.Limiter
-	last    time.Time
+	limiter                         *rate.Limiter
+	last                            time.Time
+	counter                         Counter
+	waitNS, waitCalls, delayedCalls uint64
 }
 type Manager struct {
-	security *SecurityObserver
-	mu       sync.Mutex
-	epoch    string
-	buckets  map[string]*bucket
-	accounts map[string]Counter
-	servers  map[int]Counter
-	sessions map[string]*Session
+	security          *SecurityObserver
+	TransportRegistry *server.TransportRegistry
+	started           int64
+	auth              map[string]uint64
+	closes            [closeCapacity]CloseView
+	closeSequence     uint64
+	mu                sync.Mutex
+	epoch             string
+	buckets           map[string]*bucket
+	accounts          map[string]Counter
+	servers           map[int]Counter
+	sessions          map[string]*Session
 }
 type Session struct {
 	manager        *Manager
@@ -62,6 +71,8 @@ type Session struct {
 	close          func()
 	started        int64
 	counter        Counter
+	lastPayload    int64
+	transport      *server.TransportStats
 }
 
 func NewManager() *Manager {
@@ -69,7 +80,7 @@ func NewManager() *Manager {
 	if _, e := rand.Read(b); e != nil {
 		panic(e)
 	}
-	return &Manager{security: newSecurityObserver(), epoch: hex.EncodeToString(b), buckets: map[string]*bucket{},
+	return &Manager{security: newSecurityObserver(), TransportRegistry: &server.TransportRegistry{}, started: time.Now().UnixMilli(), auth: map[string]uint64{}, epoch: hex.EncodeToString(b), buckets: map[string]*bucket{},
 		accounts: map[string]Counter{}, servers: map[int]Counter{}, sessions: map[string]*Session{}}
 }
 func ParseID(id string) (string, bool, error) {
@@ -96,15 +107,15 @@ func (m *Manager) Attach(ctx context.Context, id string, addr func() net.Addr, c
 		panic(e)
 	}
 	s := &Session{manager: m, ctx: ctx, id: id, email: email, vip: vip, sid: hex.EncodeToString(b), port: port,
-		addr: addr, close: close, started: time.Now().UnixMilli()}
+		addr: addr, close: close, started: time.Now().UnixMilli(), transport: m.TransportRegistry.Lookup(ctx)}
 	m.mu.Lock()
 	m.sessions[s.sid] = s
 	m.mu.Unlock()
-	go func() { <-ctx.Done(); m.mu.Lock(); delete(m.sessions, s.sid); m.mu.Unlock() }()
+	go func() { <-ctx.Done(); m.finish(s) }()
 	return s
 }
 func (s *Session) limiter() *rate.Limiter {
-	key := "S:" + host(s.addr())
+	key := s.bucketKey()
 	speed := StandardRate
 	if s.vip {
 		key = "P:" + s.email
@@ -121,11 +132,36 @@ func (s *Session) limiter() *rate.Limiter {
 	b.last = time.Now()
 	return b.limiter
 }
-func (s *Session) Wait(ctx context.Context, n int) error { return s.limiter().WaitN(ctx, n) }
+func (s *Session) Wait(ctx context.Context, n int) error {
+	limiter := s.limiter()
+	start := time.Now()
+	err := limiter.WaitN(ctx, n)
+	elapsed := time.Since(start)
+	m := s.manager
+	m.mu.Lock()
+	// Match the actual limiter, even if the connection changes its public IP.
+	if b := m.buckets[s.bucketKey()]; b != nil && b.limiter == limiter {
+		b.waitCalls++
+		b.waitNS += uint64(elapsed)
+		if elapsed > time.Millisecond {
+			b.delayedCalls++
+		}
+	}
+	m.mu.Unlock()
+	return err
+}
 func (s *Session) Add(up, down int) {
 	m := s.manager
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	if up+down > 0 {
+		s.lastPayload = time.Now().UnixMilli()
+	}
+	if b := m.buckets[s.bucketKey()]; b != nil {
+		b.counter.Up += uint64(up)
+		b.counter.Down += uint64(down)
+		b.last = time.Now()
+	}
 	s.counter.Up += uint64(up)
 	s.counter.Down += uint64(down)
 	a := m.accounts[s.email]
@@ -153,7 +189,7 @@ func (m *Manager) Snapshot() Snapshot {
 		if u, ok := a.(*net.UDPAddr); ok {
 			p = u.Port
 		}
-		out.Sessions[k] = SessionView{Counter: s.counter, Email: s.email, IP: host(a), RemotePort: p, Port: s.port, VIP: s.vip, AuthenticatedMS: s.started}
+		out.Sessions[k] = SessionView{Counter: s.counter, Email: s.email, IP: host(a), RemotePort: p, Port: s.port, VIP: s.vip, AuthenticatedMS: s.started, LastPayloadMS: s.lastPayload, Transport: s.transport.View()}
 	}
 	// Idle buckets retain credits across quick reconnects, then expire only
 	// when their existing bucket would be fully refilled anyway.

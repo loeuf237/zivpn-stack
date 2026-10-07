@@ -45,6 +45,9 @@ func NewServer(config *Config) (Server, error) {
 		DisablePathMTUDiscovery:        config.QUICConfig.DisablePathMTUDiscovery,
 		EnableDatagrams:                true,
 	}
+	if config.TransportRegistry != nil {
+		quicConfig.Tracer = config.TransportRegistry.Tracer
+	}
 	listener, err := quic.Listen(config.Conn, tlsConfig, quicConfig)
 	if err != nil {
 		_ = config.Conn.Close()
@@ -89,11 +92,14 @@ func (s *serverImpl) handleClient(conn quic.Connection) {
 	handler.authMutex.Lock()
 	authenticated, account := handler.authenticated, handler.authID
 	handler.authMutex.Unlock()
-	log.Printf("zivpn-quic-end: authenticated=%t account=%q remote=%s lifetime_seconds=%.1f error=%v",
-		authenticated, account, conn.RemoteAddr(), time.Since(started).Seconds(), err)
+	reason := ClassifyClose(err)
+	if reason != "idle_timeout" && reason != "peer_closed" && reason != "normal" {
+		log.Printf("zivpn-quic-end: authenticated=%t account=%q remote=%s lifetime_seconds=%.1f reason=%s",
+			authenticated, account, conn.RemoteAddr(), time.Since(started).Seconds(), reason)
+	}
 	// If the client is authenticated, we need to log the disconnect event
-	if handler.authenticated && s.config.EventLogger != nil {
-		s.config.EventLogger.Disconnect(conn.RemoteAddr(), handler.authID, err)
+	if authenticated && s.config.EventLogger != nil {
+		s.config.EventLogger.Disconnect(conn.RemoteAddr(), account, err)
 	}
 	_ = conn.CloseWithError(closeErrCodeOK, "")
 }
@@ -119,7 +125,6 @@ func newH3sHandler(config *Config, conn quic.Connection) *h3sHandler {
 }
 
 func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	log.Printf("zivpn-http-auth: post=%t host_match=%t path_match=%t credential_length=%d", r.Method == http.MethodPost, r.Host == protocol.URLHost, r.URL.Path == protocol.URLPath, len(r.Header.Get(protocol.RequestHeaderAuth)))
 	if r.Method == http.MethodPost && r.Host == protocol.URLHost && r.URL.Path == protocol.URLPath {
 		h.authMutex.Lock()
 		defer h.authMutex.Unlock()
@@ -131,7 +136,6 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				RxAuto:     h.config.IgnoreClientBandwidth,
 			})
 			w.WriteHeader(protocol.StatusAuthOK)
-			log.Printf("zivpn-auth-response: status=%d", protocol.StatusAuthOK)
 			return
 		}
 		authReq := protocol.AuthRequestFromHeader(r.Header)
@@ -171,7 +175,6 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				RxAuto:     h.config.IgnoreClientBandwidth,
 			})
 			w.WriteHeader(protocol.StatusAuthOK)
-			log.Printf("zivpn-auth-response: status=%d", protocol.StatusAuthOK)
 			// Call event logger
 			if h.config.EventLogger != nil {
 				h.config.EventLogger.Connect(h.conn.RemoteAddr(), id, actualTx)

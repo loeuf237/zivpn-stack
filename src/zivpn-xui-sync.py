@@ -39,6 +39,8 @@ TG_TOKEN = open("/etc/zivpn/telegram.token", encoding="utf-8").read().strip()
 PRIMARY_ADMIN_ID = DEPLOYMENT["primary_admin_id"]
 API_BASE = f"https://api.telegram.org/bot{TG_TOKEN}"
 TELEGRAM = Transport(API_BASE)
+from zivpn_health import Monitor, quality_report
+HEALTH = Monitor(interface=NETWORK_INTERFACE)
 
 # ==========================================
 # Core Database & Admin Helpers
@@ -218,7 +220,7 @@ def deliver_rich_report(message, chat_id, message_id=None, reply_markup=None):
     code = result.get("error_code")
     if message_id is not None and code == 400 and "message is not modified" in result.get("description", "").lower():
         return {"ok": True, "unchanged": True}
-    print(f"[Telegram Rich Rejection] method={method} code={code}")
+    print(f"[Telegram Rich Rejection] method={method} code={code} reason={result.get('failure_reason', 'api_rejection')} uncertain={result.get('delivery_uncertain', False)}")
     if code in (400, 404):
         return None
     return result
@@ -246,7 +248,7 @@ def send_telegram(message, chat_id=PRIMARY_ADMIN_ID, reply_markup=None):
             "text": message,
             "parse_mode": "Markdown"
         }
-        if truncated or is_report:
+        if truncated or is_report or getattr(message, "plain_text", False):
             payload.pop("parse_mode", None)
         if reply_markup:
             payload["reply_markup"] = reply_markup
@@ -255,7 +257,7 @@ def send_telegram(message, chat_id=PRIMARY_ADMIN_ID, reply_markup=None):
             payload.pop("parse_mode", None)
             return TELEGRAM.call("sendMessage", payload)
         if not res.get("ok"):
-            print(f"[Telegram API Rejection] method=sendMessage code={res.get('error_code')}")
+            print(f"[Telegram API Rejection] method=sendMessage code={res.get('error_code')} reason={res.get('failure_reason', 'api_rejection')} uncertain={res.get('delivery_uncertain', False)}")
         return res
     except Exception as e:
         print(f"[TG Error] {type(e).__name__}")
@@ -284,7 +286,7 @@ def edit_telegram_message(message, chat_id, message_id, reply_markup=None):
             "text": message,
             "parse_mode": "Markdown"
         }
-        if truncated or is_report:
+        if truncated or is_report or getattr(message, "plain_text", False):
             payload.pop("parse_mode", None)
         if reply_markup:
             payload["reply_markup"] = reply_markup
@@ -293,7 +295,7 @@ def edit_telegram_message(message, chat_id, message_id, reply_markup=None):
             payload.pop("parse_mode", None)
             return TELEGRAM.call("editMessageText", payload)
         if not res.get("ok"):
-            print(f"[Telegram API Rejection] method=editMessageText code={res.get('error_code')}")
+            print(f"[Telegram API Rejection] method=editMessageText code={res.get('error_code')} reason={res.get('failure_reason', 'api_rejection')} uncertain={res.get('delivery_uncertain', False)}")
         return res
     except Exception as e:
         print(f"[TG Edit Error] {type(e).__name__}")
@@ -671,6 +673,8 @@ def get_main_menu_keyboard():
                 {"text": "📈 Consommation Go", "callback_data": "menu_conso"}
             ],
             [{"text": "🔎 Diagnostic progressif", "callback_data": "menu_diagnostic"}],
+            [{"text": "🩺 Santé et erreurs", "callback_data": "menu_health"},
+             {"text": "📶 Qualité et plafonds", "callback_data": "menu_quality"}],
             [
                 {"text": "🔄 Redémarrer Services", "callback_data": "menu_restart"},
                 {"text": "💾 Sauvegarder DB", "callback_data": "menu_backup"}
@@ -1117,6 +1121,8 @@ def build_help_text():
         "• `/menu` : Menu interactif complet avec boutons tactiles\n"
         "• `/status` : État matériel (CPU/RAM/Disque) et daemons\n"
         "• `/diagnostic` : Diagnostic progressif privé ; `/annuler` pour arrêter\n"
+        "• `/sante [24|48]` : Historique privé de santé et erreurs (administrateur principal)\n"
+        "• `/qualite` : Débits, plafonds et RTT sur 5 s (administrateur principal)\n"
         "• `/taches` : État des dernières tâches en privé\n"
         "• `/stats` : Statistiques globales des ports 5667 & 5668\n"
         "• `/users` : Tableau des sessions (ajoutez --texte pour le rendu classique)\n"
@@ -1226,7 +1232,7 @@ def handle_telegram_command(chat_id, user_id, text, chat_type=None):
     if force_text:
         args = args[:-1]
 
-    if cmd in ("/exec", "/securite", "/destinations", "/dns", "/apps") and not (
+    if cmd in ("/exec", "/securite", "/destinations", "/dns", "/apps", "/sante", "/qualite") and not (
         user_id == PRIMARY_ADMIN_ID
         and chat_type == "private"
         and chat_id == PRIMARY_ADMIN_ID
@@ -1245,6 +1251,20 @@ def handle_telegram_command(chat_id, user_id, text, chat_type=None):
         )
         return
 
+    if cmd in ("/sante", "/qualite"):
+        try:
+            if cmd == "/sante":
+                hours = int(args[0]) if args else 48
+                if hours not in (24, 48) or len(args) > 1:
+                    raise ValueError('hours')
+                report = HEALTH.report(hours)
+            else:
+                import zivpn_native_accounting as native
+                report = quality_report(native)
+            send_telegram(report, chat_id=chat_id)
+        except (OSError, ValueError, KeyError, TypeError, sqlite3.Error):
+            send_telegram("Mesure indisponible. Utilisation : /sante [24|48] ou /qualite.", chat_id=chat_id)
+        return
     if cmd in ("/diagnostic", "/annuler"):
         if chat_type != "private" or chat_id != user_id:
             send_telegram("Le diagnostic s’utilise en conversation privée.", chat_id=chat_id)
@@ -1380,7 +1400,7 @@ def handle_telegram_callback(callback):
     message_id = message.get("message_id")
     user_id = callback.get("from", {}).get("id")
 
-    if data == "menu_apps" and not (user_id == PRIMARY_ADMIN_ID and chat_id == PRIMARY_ADMIN_ID and message.get("chat", {}).get("type") == "private"):
+    if data in ("menu_apps", "menu_health", "menu_quality") and not (user_id == PRIMARY_ADMIN_ID and chat_id == PRIMARY_ADMIN_ID and message.get("chat", {}).get("type") == "private"):
         answer_callback(callback_id, "Rapport réservé à l’administrateur principal en privé.")
         return
     admin_ids = get_admin_ids()
@@ -1390,7 +1410,9 @@ def handle_telegram_callback(callback):
 
     answer_callback(callback_id)
 
-    if data == "menu_diagnostic":
+    if data in ("menu_health", "menu_quality"):
+        handle_telegram_command(chat_id, user_id, "/sante" if data == "menu_health" else "/qualite", chat_type=message.get("chat", {}).get("type"))
+    elif data == "menu_diagnostic":
         result = DIAGNOSTICS.start(chat_id, user_id, message.get("chat", {}).get("type"))
         if result:
             send_telegram(result, chat_id=chat_id)
@@ -1650,13 +1672,22 @@ def sync_accounts():
 
     conn.close()
 
+_TRAFFIC_ROLLUP = dict(up=0, down=0, attributed_up=0, attributed_down=0)
+_TRAFFIC_LOG_AT = 0
+
 def sync_traffic():
     """Apply persistent per-flow differences and authenticated account bindings."""
+    global _TRAFFIC_LOG_AT
     try:
         result = zivpn_accounting.sync_traffic(DB_PATH)
-        if result["up"] or result["down"]:
-            print(f"[Traffic] up={result['up']} down={result['down']} "
-                  f"attributed_up={result['attributed_up']} attributed_down={result['attributed_down']}")
+        for key in _TRAFFIC_ROLLUP:
+            _TRAFFIC_ROLLUP[key] += result[key]
+        now = time.monotonic()
+        if now - _TRAFFIC_LOG_AT >= 600:
+            print('[Traffic rollup] ' + ' '.join(f'{key}={value}' for key,value in _TRAFFIC_ROLLUP.items()), flush=True)
+            for key in _TRAFFIC_ROLLUP:
+                _TRAFFIC_ROLLUP[key] = 0
+            _TRAFFIC_LOG_AT = now
     except Exception as e:
         print(f"[Traffic Sync Error] {type(e).__name__}")
 
@@ -1734,6 +1765,11 @@ def main():
             if now - last_traffic_sync >= 10:
                 sync_traffic()
                 last_traffic_sync = now
+            import zivpn_native_accounting as native
+            notices = HEALTH.collect(native, TELEGRAM)
+            if notices:
+                from zivpn_health import PlainText
+                send_telegram(PlainText('Alerte de santé — serveur\n' + '\n'.join(notices[:10]) + '\n/sante pour le bilan.'), chat_id=PRIMARY_ADMIN_ID)
         except Exception as e:
             print(f"[Main Loop Error] {type(e).__name__}")
         time.sleep(5)

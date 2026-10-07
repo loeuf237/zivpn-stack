@@ -29,22 +29,29 @@ def main():
         print(json.dumps({'allowed': allowed}))
         return 0
     port = int(request['server_port'])
-    identity = authenticate(request['addr'], request['auth'],
-                            required_tag='inbound-zivpn-limited' if port == 5668 else None,
-                            db_path=db_path, manage_ipset=False)
-    if identity is None:
-        return 1
+    result = authenticate(request['addr'], request['auth'],
+                          required_tag='inbound-zivpn-limited' if port == 5668 else None,
+                          db_path=db_path, manage_ipset=False, diagnostic=True)
+    if not result['ok']:
+        print(json.dumps(result))
+        return 0
     with sqlite3.connect('file:' + db_path + '?mode=ro', uri=True, timeout=5) as conn:
         conn.row_factory = sqlite3.Row
-        rows = conn.execute(ACCOUNT_QUERY + ' WHERE c.email=?', (identity,)).fetchall()
-        if len(rows) != 1 or access_denial(rows[0], int(time.time()*1000)):
-            return 1
-        print(json.dumps({'id': account_id(rows[0])}))
+        rows = conn.execute(ACCOUNT_QUERY + ' WHERE c.email=?', (result['email'],)).fetchall()
+        denial = access_denial(rows[0], int(time.time()*1000)) if len(rows) == 1 else 'invalid_credentials'
+        if denial:
+            print(json.dumps({'ok': False, 'reason': denial}))
+        else:
+            print(json.dumps({'ok': True, 'reason': 'accepted', 'id': account_id(rows[0])}))
     return 0
 
 
 if __name__ == '__main__':
     try:
         sys.exit(main())
-    except (KeyError, ValueError, TypeError, OSError, sqlite3.Error):
-        sys.exit(1)
+    except sqlite3.Error:
+        print(json.dumps({"ok": False, "reason": "database_error"}))
+        sys.exit(0)
+    except (KeyError, ValueError, TypeError, OSError):
+        print(json.dumps({"ok": False, "reason": "internal_error"}))
+        sys.exit(0)

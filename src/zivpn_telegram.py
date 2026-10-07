@@ -3,7 +3,7 @@ import os
 import sqlite3
 import threading
 import time
-from collections import deque
+from collections import deque, Counter
 import requests
 
 
@@ -11,6 +11,37 @@ class Transport:
     def __init__(self, base, session_factory=requests.Session, sleep=time.sleep):
         self.base, self.factory, self.sleep = base, session_factory, sleep
         self.local = threading.local()
+        self.stats_lock = threading.Lock()
+        self.stats = Counter()
+
+    def record(self, method, outcome):
+        # Method and outcome are fixed internal labels, never payload/description.
+        with self.stats_lock:
+            self.stats[method + ':' + outcome] += 1
+
+    def snapshot(self):
+        with self.stats_lock:
+            return dict(self.stats)
+
+    @staticmethod
+    def rejection_reason(result):
+        text = str(result.get('description', '')).lower()
+        for fragment, reason in (
+            ('message is not modified', 'unchanged'),
+            ("can't parse entities", 'invalid_format'),
+            ('message to edit not found', 'message_missing'),
+            ("message can't be edited", 'message_not_editable'),
+            ('query is too old', 'callback_expired'),
+            ('query id is invalid', 'callback_expired'),
+            ('chat not found', 'chat_missing'),
+            ('bot was blocked', 'bot_blocked'),
+            ('method not found', 'unsupported_method'),
+            ('too many requests', 'rate_limit'),
+        ):
+            if fragment in text:
+                return reason
+        return 'server_error' if isinstance(result.get('error_code'), int) and result['error_code'] >= 500 else 'api_rejection'
+
 
     def call(self, method, payload=None, files=None):
         if not hasattr(self.local, 'session'):
@@ -27,16 +58,27 @@ class Transport:
                 if not isinstance(result, dict) or not isinstance(result.get('ok'), bool):
                     raise ValueError('Invalid Telegram response')
             except Exception as error:
-                print(f'[Telegram Transport] method={method} error={type(error).__name__}', flush=True)
+                self.record(method, 'transport_error')
+                print(f'[Telegram Transport] method={method} error={type(error).__name__} attempt={attempt+1} retry={safe and attempt<2}', flush=True)
                 if safe and attempt < 2:
                     self.sleep(attempt+1)
                     continue
-                return {'ok': False, 'delivery_uncertain': not safe, 'transport_error': True}
+                if not safe:
+                    self.record(method, 'delivery_uncertain')
+                return {'ok': False, 'delivery_uncertain': not safe, 'transport_error': True, 'failure_reason': 'transport_error'}
             if result.get('ok'):
+                self.record(method, 'success')
                 return result
             code = result.get('error_code', response.status_code)
             if method == 'editMessageText' and code == 400 and 'message is not modified' in result.get('description', '').lower():
+                self.record(method, 'unchanged')
                 return {'ok': True, 'unchanged': True}
+            reason = self.rejection_reason(result)
+            self.record(method, reason)
+            result = dict(result, failure_reason=reason)
+            if not safe and isinstance(code, int) and code >= 500:
+                result['delivery_uncertain'] = True
+                self.record(method, 'delivery_uncertain')
             delay = result.get('parameters', {}).get('retry_after')
             if code == 429 and isinstance(delay, (int, float)) and 0 <= delay <= 10 and attempt < 2 and not files:
                 self.sleep(delay + 0.1)
@@ -44,7 +86,7 @@ class Transport:
             if safe and isinstance(code, int) and code >= 500 and attempt < 2:
                 self.sleep(attempt+1)
                 continue
-            print(f'[Telegram Rejection] method={method} code={code}', flush=True)
+            print(f'[Telegram Rejection] method={method} code={code} reason={reason} uncertain={result.get("delivery_uncertain", False)}', flush=True)
             return result
 
 

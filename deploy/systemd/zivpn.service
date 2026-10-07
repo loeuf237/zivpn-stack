@@ -16,6 +16,8 @@ UMask=0077
 NoNewPrivileges=true
 ProtectHome=true
 PrivateTmp=true
+LogRateLimitIntervalSec=30s
+LogRateLimitBurst=500
 StandardOutput=journal
 StandardError=journal
 

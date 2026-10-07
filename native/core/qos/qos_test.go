@@ -149,7 +149,7 @@ func TestTunneledSharedCeilingsAndMixedIP(t *testing.T) {
 			t.Fatal(e)
 		}
 		port := pkt.LocalAddr().(*net.UDPAddr).Port
-		cfg := &server.Config{Conn: pkt, TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}}, IgnoreClientBandwidth: true, Authenticator: fixtureAuth{}}
+		cfg := &server.Config{Conn: pkt, TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}}, IgnoreClientBandwidth: true, Authenticator: fixtureAuth{}, TransportRegistry: m.TransportRegistry}
 		cfg.AuthenticatedOutbound = func(ctx context.Context, id string, addr func() net.Addr, close func(), base server.Outbound) server.Outbound {
 			return m.Attach(ctx, id, addr, close, port).Wrap(base)
 		}
@@ -256,6 +256,11 @@ func TestTunneledSharedCeilingsAndMixedIP(t *testing.T) {
 	snap := m.Snapshot()
 	if snap.Accounts["vip-one"].Down == 0 || snap.Accounts["free-one"].Down == 0 {
 		t.Fatal("Missing account telemetry")
+	}
+	for _, view := range snap.Sessions {
+		if view.Transport.Sent == 0 || view.Transport.RTTMS <= 0 || view.LastPayloadMS == 0 {
+			t.Fatalf("missing live transport metrics: %+v", view)
+		}
 	}
 	// Both UDP forwarding and TCP share the same Session limiter in Wrap.
 	udp, e := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})

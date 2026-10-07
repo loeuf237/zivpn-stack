@@ -20,6 +20,7 @@ const (
 )
 
 type Config struct {
+	TransportRegistry     *TransportRegistry
 	TLSConfig             TLSConfig
 	QUICConfig            QUICConfig
 	Conn                  net.PacketConn

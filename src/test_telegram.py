@@ -29,6 +29,20 @@ class TelegramTests(unittest.TestCase):
         self.assertEqual(s.post.call_count,1)
     def test_malformed_result_is_uncertain(self):
         c,s,_=self.client([{'unexpected':'response'}]);self.assertTrue(c.call('sendMessage',{})['delivery_uncertain'])
+    def test_rejection_reason_does_not_log_description(self):
+        import contextlib, io
+        c,s,_=self.client([{'ok':False,'error_code':400,'description':"Bad Request: can't parse entities PASSWORD-PRIVATE"}])
+        stream=io.StringIO()
+        with contextlib.redirect_stdout(stream): result=c.call('editMessageText',{})
+        self.assertEqual(result['failure_reason'],'invalid_format')
+        self.assertNotIn('PASSWORD-PRIVATE',stream.getvalue())
+        self.assertEqual(c.snapshot()['editMessageText:invalid_format'],1)
+
+    def test_server_error_send_uncertain_without_duplicate(self):
+        c,s,_=self.client([{'ok':False,'error_code':502,'description':'Bad Gateway'}])
+        self.assertTrue(c.call('sendRichMessage',{})['delivery_uncertain'])
+        self.assertEqual(s.post.call_count,1)
+
     def test_tasks_parallel_order_and_dedup(self):
         with tempfile.TemporaryDirectory() as d:
             gate=threading.Event();other=threading.Event();done=threading.Event();seen=[]

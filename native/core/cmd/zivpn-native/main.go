@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/tls"
 	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
@@ -25,11 +26,20 @@ import (
 type authenticator struct {
 	helper, db string
 	port       int
+	manager    *qos.Manager
 }
+
+var helperSlots = make(chan struct{}, 16)
 
 func helperCall(helper, db string, input interface{}, output interface{}) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
+	select {
+	case helperSlots <- struct{}{}:
+		defer func() { <-helperSlots }()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 	cmd := exec.CommandContext(ctx, helper)
 	if db != "" {
 		cmd.Env = append(os.Environ(), "ZIVPN_NATIVE_DB="+db)
@@ -42,24 +52,51 @@ func helperCall(helper, db string, input interface{}, output interface{}) error 
 	// Never log helper input, credentials, or stdout on rejection.
 	b, e = cmd.Output()
 	if e != nil {
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
 		return e
 	}
 	return json.Unmarshal(b, output)
 }
 func (a authenticator) Authenticate(addr net.Addr, auth string, _ uint64) (bool, string) {
 	var out struct {
-		ID string `json:"id"`
+		ID     string `json:"id"`
+		OK     bool   `json:"ok"`
+		Reason string `json:"reason"`
 	}
 	e := helperCall(a.helper, a.db, map[string]interface{}{"addr": addr.String(), "auth": auth, "server_port": a.port}, &out)
+	reason := out.Reason
 	if e != nil {
-		log.Printf("zivpn-helper-failed: %T", e)
-		return false, ""
+		reason = "helper_error"
+		if errors.Is(e, context.DeadlineExceeded) {
+			reason = "helper_timeout"
+		}
+		if _, ok := e.(*exec.ExitError); ok {
+			reason = "helper_exit"
+		}
+	} else {
+		switch reason {
+		case "accepted", "invalid_credentials", "missing_credentials", "ambiguous_credentials", "wrong_profile", "disabled", "expired", "quota", "unassigned", "database_error", "internal_error":
+		default:
+			reason = "invalid_helper_response"
+		}
+		if out.OK && reason == "accepted" {
+			if _, _, err := qos.ParseID(out.ID); err != nil {
+				reason = "invalid_helper_response"
+			} else {
+				a.manager.RecordAuth(reason)
+				return true, out.ID
+			}
+		} else if reason == "accepted" {
+			reason = "invalid_helper_response"
+		}
 	}
-	if _, _, e = qos.ParseID(out.ID); e != nil {
-		return false, ""
-	}
-	return true, out.ID
+	a.manager.RecordAuth(reason)
+	// Failures are aggregated in /health, not repeated for every Android worker.
+	return false, ""
 }
+
 func main() {
 	configPath := flag.String("config", "/etc/zivpn/config.json", "Existing certificate/listen configuration")
 	helper := flag.String("auth-helper", "/usr/local/sbin/zivpn-native-auth", "Root identity helper")
@@ -108,8 +145,9 @@ func main() {
 			TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}},
 			QUICConfig: server.QUICConfig{DisablePathMTUDiscovery: config.QUIC.DisablePathMTUDiscovery,
 				MaxIdleTimeout: 60 * time.Second, KeepAlivePeriod: 5 * time.Second},
-			IgnoreClientBandwidth: true, Authenticator: authenticator{*helper, *db, port},
-			MasqHandler: http.NotFoundHandler()}
+			IgnoreClientBandwidth: true, Authenticator: authenticator{*helper, *db, port, manager},
+			TransportRegistry: manager.TransportRegistry,
+			MasqHandler:       http.NotFoundHandler()}
 		config.AuthenticatedOutbound = func(ctx context.Context, id string, addr func() net.Addr, close func(), base server.Outbound) server.Outbound {
 			return manager.Attach(ctx, id, addr, close, port).Wrap(base)
 		}
@@ -139,6 +177,14 @@ func main() {
 		}
 		w.Header().Set("Content-Type", "application/json")
 		json.NewEncoder(w).Encode(manager.Snapshot())
+	})
+	mux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != "GET" {
+			w.WriteHeader(405)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		json.NewEncoder(w).Encode(manager.Health())
 	})
 	mux.HandleFunc("/security", func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != "GET" {
@@ -192,6 +238,7 @@ func main() {
 				}
 				e := helperCall(*helper, *db, map[string]interface{}{"check": true, "ids": ids}, &out)
 				if e != nil {
+					manager.RecordAuth("recheck_error")
 					log.Print("Account recheck unavailable; retrying")
 					continue
 				}

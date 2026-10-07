@@ -12,7 +12,7 @@ def style_keyboard(markup, sensitive_allowed=False, diagnostic_running=False):
                 button['style']='success'
             elif action.startswith('menu_') and action!='menu_close':
                 button['style']='primary'
-            if (action=='menu_apps' and not sensitive_allowed) or (action=='menu_diagnostic' and diagnostic_running):
+            if (action in ('menu_apps', 'menu_health', 'menu_quality') and not sensitive_allowed) or (action=='menu_diagnostic' and diagnostic_running):
                 button.pop('callback_data',None)
                 button['disabled']={}
     return result

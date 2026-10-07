@@ -60,10 +60,13 @@ def client_ip(address):
         return None
 
 
-def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=None, server_port=None, manage_ipset=True):
+def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=None, server_port=None, manage_ipset=True, diagnostic=False):
     """Authorize against current SQLite state, failing closed on errors."""
+    def refused(reason):
+        return {"ok": False, "reason": reason} if diagnostic else None
+
     if not password:
-        return None
+        return refused("missing_credentials")
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     try:
         database_uri = Path(db_path).resolve().as_uri() + "?mode=rw"
@@ -72,21 +75,25 @@ def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=N
             accounts = conn.execute(ACCOUNT_QUERY + " WHERE c.password = ?", (password,)).fetchall()
             # A shared password cannot identify an individual account reliably.
             if len(accounts) != 1:
-                return None
+                return refused("invalid_credentials" if not accounts else "ambiguous_credentials")
             account = accounts[0]
             if required_tag and account["inbound_tag"] != required_tag:
-                return None
-            if access_denial(account, now_ms):
-                return None
+                return refused("wrong_profile")
+            denial = access_denial(account, now_ms)
+            if denial:
+                return refused(denial)
             if int(account["client_expiry"] or 0) < 0 or int(account["traffic_expiry"] or 0) < 0:
                 # Serialize first-login activation and recheck after the lock.
                 conn.execute("BEGIN IMMEDIATE")
                 rows = conn.execute(ACCOUNT_QUERY + " WHERE c.password = ?", (password,)).fetchall()
                 if len(rows) != 1:
-                    return None
+                    return refused("invalid_credentials" if not rows else "ambiguous_credentials")
                 account = rows[0]
-                if (required_tag and account["inbound_tag"] != required_tag) or access_denial(account, now_ms):
-                    return None
+                if required_tag and account["inbound_tag"] != required_tag:
+                    return refused("wrong_profile")
+                denial = access_denial(account, now_ms)
+                if denial:
+                    return refused(denial)
                 conn.execute(
                     "UPDATE clients SET expiry_time = ? - expiry_time, updated_at = ? "
                     "WHERE id = ? AND expiry_time < 0",
@@ -109,8 +116,10 @@ def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=N
                     print(f"[ZiVPN Identity Warning] {type(error).__name__}", file=__import__("sys").stderr)
                 finally:
                     conn.execute("RELEASE zivpn_identity")
-    except (sqlite3.Error, OSError, ValueError, TypeError, OverflowError, subprocess.SubprocessError):
-        return None
+    except sqlite3.Error:
+        return refused("database_error")
+    except (OSError, ValueError, TypeError, OverflowError, subprocess.SubprocessError):
+        return refused("internal_error")
 
     ip = client_ip(address)
     if manage_ipset and ip and ipaddress.ip_address(ip).version == 4:
@@ -119,7 +128,7 @@ def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=N
             subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5)
         except (OSError, subprocess.TimeoutExpired):
             pass
-    return email
+    return {"ok": True, "email": email, "reason": "accepted"} if diagnostic else email
 
 
 def main(argv, required_tag=None, server_port=5667):

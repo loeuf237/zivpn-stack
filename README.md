@@ -33,3 +33,5 @@ Voir [DEPLOYMENT.md](docs/DEPLOYMENT.md). L’installateur refuse d’écraser u
 Cibles prévues : Ubuntu 24.04 et Debian 12 avec Python ≥ 3.10, systemd, IPv4 et architecture x86-64 ou ARM64. Une VM répondant à ces critères peut être hébergée chez Azure, Google Cloud, AWS, Alibaba Cloud ou un autre fournisseur. La création des ressources et leurs règles réseau restent à configurer chez le fournisseur. La matrice cloud et ARM64 n’a pas encore été validée sur des VM neuves.
 
 Ne lancez pas l’installateur neuf sur la production actuelle. Voir [SECURITY.md](SECURITY.md) pour les exclusions Git et les migrations privées, et [THIRD_PARTY.md](THIRD_PARTY.md) pour les licences.
+
+Operational health and private Telegram reports: [observability](docs/OBSERVABILITY.md).
