@@ -2,6 +2,7 @@ package server
 
 import (
 	"errors"
+	"sync"
 	"testing"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	"go.uber.org/goleak"
 
 	"github.com/apernet/hysteria/core/internal/protocol"
+	"github.com/apernet/hysteria/core/internal/utils"
 )
 
 func TestUDPSessionManager(t *testing.T) {
@@ -172,4 +174,18 @@ func TestUDPSessionManager(t *testing.T) {
 	time.Sleep(1 * time.Second) // Wait one more second just to be sure
 	assert.Zero(t, sm.Count(), "session count should be 0")
 	goleak.VerifyNone(t)
+}
+
+func TestUDPConcurrentCleanupClosesSocketOnce(t *testing.T) {
+	conn := newMockUDPConn(t)
+	conn.EXPECT().Close().RunAndReturn(func() error { time.Sleep(time.Millisecond); return nil }).Once()
+	entry := &udpSessionEntry{ID: 1, Conn: conn, Last: utils.NewAtomicTime(time.Now())}
+	manager := newUDPSessionManager(nil, nil, time.Second)
+	manager.m[1] = entry
+	var wg sync.WaitGroup
+	for i := 0; i < 64; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); manager.cleanup(false); entry.closeConn() }()
+	}
+	wg.Wait()
 }

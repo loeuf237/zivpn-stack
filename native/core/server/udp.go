@@ -30,11 +30,16 @@ type udpEventLogger interface {
 }
 
 type udpSessionEntry struct {
-	ID      uint32
-	Conn    UDPConn
-	D       *frag.Defragger
-	Last    *utils.AtomicTime
-	Timeout atomic.Bool // true if the session is closed due to timeout
+	ID        uint32
+	Conn      UDPConn
+	D         *frag.Defragger
+	Last      *utils.AtomicTime
+	Timeout   atomic.Bool // true if the session is closed due to timeout
+	closeOnce sync.Once
+}
+
+func (e *udpSessionEntry) closeConn() {
+	e.closeOnce.Do(func() { _ = e.Conn.Close() })
 }
 
 // Feed feeds a UDP message to the session.
@@ -164,7 +169,7 @@ func (m *udpSessionManager) cleanup(idleOnly bool) {
 	for _, entry := range m.m {
 		if !idleOnly || now.Sub(entry.Last.Get()) > m.idleTimeout {
 			entry.Timeout.Store(true)
-			_ = entry.Conn.Close()
+			entry.closeConn()
 			// Closing the connection here will cause the ReceiveLoop to exit,
 			// and the session will be removed from the map there.
 		}
@@ -194,7 +199,7 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 		go func() {
 			err := entry.ReceiveLoop(m.io)
 			if !entry.Timeout.Load() {
-				_ = entry.Conn.Close()
+				entry.closeConn()
 				m.eventLogger.Close(entry.ID, err)
 			} else {
 				// Connection already closed by timeout cleanup,

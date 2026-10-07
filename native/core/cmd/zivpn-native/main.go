@@ -287,7 +287,8 @@ func main() {
 			}
 		}
 	}()
-	fmt.Printf("Native ZIVPN QoS ready: %d listeners; Standard default 1000000 B/s per IP; Premium 4000000 B/s per account\n", len(servers))
+	rates := manager.Health().Defaults
+	fmt.Printf("Native ZIVPN QoS ready: %d listeners; Standard default %d B/s per IP; Premium default %d B/s per account\n", len(servers), rates.Standard, rates.Premium)
 	<-ctx.Done()
 	for _, srv := range servers {
 		srv.Close()
