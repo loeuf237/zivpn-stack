@@ -195,6 +195,12 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 			D:    &frag.Defragger{},
 			Last: utils.NewAtomicTime(time.Now()),
 		}
+		// Insert the session into the map
+		m.mutex.Lock()
+		m.m[msg.SessionID] = entry
+		m.mutex.Unlock()
+		// Start only after registration: an immediate read failure must not
+		// delete an absent entry and leave a closed session registered.
 		// Start the receive loop for this session
 		go func() {
 			err := entry.ReceiveLoop(m.io)
@@ -212,10 +218,6 @@ func (m *udpSessionManager) feed(msg *protocol.UDPMessage) {
 			delete(m.m, entry.ID)
 			m.mutex.Unlock()
 		}()
-		// Insert the session into the map
-		m.mutex.Lock()
-		m.m[msg.SessionID] = entry
-		m.mutex.Unlock()
 	}
 
 	// Feed the message to the session

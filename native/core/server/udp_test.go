@@ -189,3 +189,20 @@ func TestUDPConcurrentCleanupClosesSocketOnce(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+func TestUDPImmediateReadFailureRemovesRegisteredSession(t *testing.T) {
+	io := newMockUDPIO(t)
+	logger := newMockUDPEventLogger(t)
+	conn := newMockUDPConn(t)
+	msg := &protocol.UDPMessage{SessionID: 77, FragCount: 1, Addr: "fixture:53", Data: []byte("x")}
+	err := errors.New("immediate failure")
+	io.EXPECT().UDP(msg.Addr).Return(conn, nil).Once()
+	logger.EXPECT().New(msg.SessionID, msg.Addr).Return().Once()
+	logger.EXPECT().Close(msg.SessionID, err).Return().Once()
+	conn.EXPECT().ReadFrom(mock.Anything).Return(0, "", err).Once()
+	conn.EXPECT().WriteTo(msg.Data, msg.Addr).Return(1, nil).Once()
+	conn.EXPECT().Close().Return(nil).Once()
+	manager := newUDPSessionManager(io, logger, time.Second)
+	manager.feed(msg)
+	assert.Eventually(t, func() bool { return manager.Count() == 0 }, time.Second, time.Millisecond)
+}

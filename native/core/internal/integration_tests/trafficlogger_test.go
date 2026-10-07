@@ -125,6 +125,7 @@ func TestClientServerTrafficLoggerUDP(t *testing.T) {
 
 	sobConn := mocks.NewMockUDPConn(t)
 	sobConnCh := make(chan []byte, 1)
+	closed := make(chan struct{})
 	sobConn.EXPECT().ReadFrom(mock.Anything).RunAndReturn(func(bs []byte) (int, string, error) {
 		b := <-sobConnCh
 		if b == nil {
@@ -135,6 +136,7 @@ func TestClientServerTrafficLoggerUDP(t *testing.T) {
 	})
 	sobConn.EXPECT().Close().RunAndReturn(func() error {
 		close(sobConnCh)
+		close(closed)
 		return nil
 	}).Once()
 	serverOb.EXPECT().UDP(addr).Return(sobConn, nil).Once()
@@ -168,4 +170,11 @@ func TestClientServerTrafficLoggerUDP(t *testing.T) {
 	// The client should be disconnected
 	_, err = c.UDP()
 	assert.Error(t, err)
+	// Client disconnection can precede asynchronous server socket cleanup.
+	// Wait for the actual close before the mocks assert their expectations.
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("outbound UDP socket not closed after disconnect")
+	}
 }
