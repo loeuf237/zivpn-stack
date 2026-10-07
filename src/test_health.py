@@ -27,6 +27,8 @@ class HealthTests(unittest.TestCase):
         self.assertEqual(row['sessions'], 4)
         self.assertEqual(row['delayed_percent'], 60)
         self.assertFalse(bucket_rates(b, a, 5))
+        b['buckets']['S:203.0.113.1']['generation'] = 2
+        self.assertFalse(bucket_rates(a, b, 5))
         b['epoch'] = 'b'
         self.assertFalse(bucket_rates(a, b, 5))
 
@@ -68,6 +70,9 @@ class HealthTests(unittest.TestCase):
             self.assertIn('database_error=3', monitor.report(now=2062))
             native.request.return_value = health(auth={'accepted':3,'database_error':7})
             self.assertFalse(monitor.collect(native,transport,now=2122))
+            monitor = Monitor(str(Path(directory)/'health.db'))
+            native.request.return_value = health(auth={'accepted':4,'database_error':11})
+            self.assertFalse(monitor.collect(native,transport,now=2183))
 
     def test_sensitive_commands_and_buttons_require_primary_private(self):
         tree = ast.parse(Path(__file__).with_name('zivpn-xui-sync.py').read_text())

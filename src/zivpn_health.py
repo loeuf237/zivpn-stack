@@ -21,7 +21,7 @@ def bucket_rates(first, second, elapsed):
     rows = []
     for key, current in second['buckets'].items():
         old = first['buckets'].get(key)
-        if old is None:
+        if old is None or old.get("generation") != current.get("generation"):
             continue
         delta = current['up'] + current['down'] - old['up'] - old['down']
         waits = current['wait_calls'] - old['wait_calls']
@@ -68,7 +68,11 @@ class Monitor:
                 CREATE INDEX IF NOT EXISTS closes_date ON closes(closed_ms);
                 CREATE TABLE IF NOT EXISTS samples (created REAL PRIMARY KEY, data TEXT);
                 CREATE TABLE IF NOT EXISTS cursors (epoch TEXT PRIMARY KEY, sequence INTEGER);
+                CREATE TABLE IF NOT EXISTS state (key TEXT PRIMARY KEY, value REAL);
             ''')
+            row = db.execute("SELECT value FROM state WHERE key='last_alert'").fetchone()
+            if row:
+                self.alerted['notice'] = row[0]
         os.chmod(self.path, 0o600)
 
     def connect(self):
@@ -147,6 +151,8 @@ class Monitor:
         # Group all conditions, with one notification at most every 30 minutes.
         if notices and now - self.alerted.get('notice', 0) >= 1800:
             self.alerted['notice'] = now
+            with self.lock, self.connect() as db:
+                db.execute("INSERT OR REPLACE INTO state VALUES ('last_alert',?)", (now,))
             return notices
         return []
 

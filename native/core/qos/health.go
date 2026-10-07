@@ -22,9 +22,10 @@ type CloseView struct {
 	Transport server.TransportView `json:"transport"`
 }
 type BucketView struct {
-	Key      string `json:"key"`
-	Limit    int    `json:"limit_bytes_per_second"`
-	Sessions int    `json:"sessions"`
+	Generation uint64 `json:"generation"`
+	Key        string `json:"key"`
+	Limit      int    `json:"limit_bytes_per_second"`
+	Sessions   int    `json:"sessions"`
 	Counter
 	WaitNS       uint64 `json:"wait_ns"`
 	WaitCalls    uint64 `json:"wait_calls"`
@@ -93,7 +94,7 @@ func (m *Manager) Health() HealthView {
 		if len(k) > 2 && k[:2] == "P:" {
 			speed = PremiumRate
 		}
-		out.Buckets[k] = BucketView{Key: k, Limit: speed, Counter: b.counter, WaitNS: b.waitNS, WaitCalls: b.waitCalls, DelayedCalls: b.delayedCalls}
+		out.Buckets[k] = BucketView{Generation: b.generation, Key: k, Limit: speed, Counter: b.counter, WaitNS: b.waitNS, WaitCalls: b.waitCalls, DelayedCalls: b.delayedCalls}
 	}
 	for _, s := range m.sessions {
 		k := s.bucketKey()

@@ -42,6 +42,7 @@ type Snapshot struct {
 	Sessions map[string]SessionView `json:"sessions"`
 }
 type bucket struct {
+	generation                      uint64
 	limiter                         *rate.Limiter
 	last                            time.Time
 	counter                         Counter
@@ -54,6 +55,7 @@ type Manager struct {
 	auth              map[string]uint64
 	closes            [closeCapacity]CloseView
 	closeSequence     uint64
+	bucketSequence    uint64
 	mu                sync.Mutex
 	epoch             string
 	buckets           map[string]*bucket
@@ -126,7 +128,8 @@ func (s *Session) limiter() *rate.Limiter {
 	defer m.mu.Unlock()
 	b := m.buckets[key]
 	if b == nil {
-		b = &bucket{limiter: rate.NewLimiter(rate.Limit(speed), Burst)}
+		m.bucketSequence++
+		b = &bucket{generation: m.bucketSequence, limiter: rate.NewLimiter(rate.Limit(speed), Burst)}
 		m.buckets[key] = b
 	}
 	b.last = time.Now()
