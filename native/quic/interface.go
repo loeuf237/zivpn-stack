@@ -323,6 +323,14 @@ type Config struct {
 	// Path MTU discovery is only available on systems that allow setting of the Don't Fragment (DF) bit.
 	// If unavailable or disabled, packets will be at most 1252 (IPv4) / 1232 (IPv6) bytes in size.
 	DisablePathMTUDiscovery bool
+	// InitialPacketSize sets the initial QUIC UDP payload size, excluding any
+	// transport wrapper overhead. Zero preserves the address-family default.
+	// Nonzero values must be between 1200 and 1452. DisablePathMTUDiscovery
+	// keeps this size fixed, which is useful for constrained tunnel paths.
+	InitialPacketSize uint16
+	// UseCubic selects CUBIC for the initial controller. False preserves
+	// this fork's Reno default. SetCongestionControl can still replace it.
+	UseCubic bool
 	// Allow0RTT allows the application to decide if a 0-RTT connection attempt should be accepted.
 	// Only valid for the server.
 	Allow0RTT bool

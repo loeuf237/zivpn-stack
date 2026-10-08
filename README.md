@@ -31,6 +31,26 @@ Les commandes suivantes sont réservées à l’administrateur principal dans sa
 
 Les réglages persistent dans la base privée 3X-UI. Une valeur de **1 Mo/s correspond à 1 000 000 octets/s**. Le plafond représente un maximum partagé, pas une vitesse garantie.
 
+## Contrôle de congestion et MTU
+
+Le serveur natif accepte `congestionControl` avec les valeurs `bbr`, `reno` et `cubic`. Sans ce réglage, il utilise BBR. Le choix du contrôleur ne modifie pas les plafonds Standard par IP ou Premium par compte. CUBIC utilise l'algorithme déjà présent dans le fork QUIC ; la [documentation des correctifs](docs/BBR_FIX.md) précise sa version d'origine.
+
+Extrait à intégrer à une configuration native complète pour sélectionner CUBIC et limiter la taille des paquets :
+
+```json
+{
+  "congestionControl": "cubic",
+  "quic": {
+    "initialPacketSize": 1200,
+    "disablePathMTUDiscovery": true
+  }
+}
+```
+
+`initialPacketSize` désigne la charge QUIC, hors obfuscation, et accepte les valeurs de 1 200 à 1 452 octets. Zéro ou une valeur absente conserve les tailles initiales par défaut : 1 252 octets en IPv4 et 1 232 en IPv6. Salamander ajoute 8 octets à la charge UDP. `disablePathMTUDiscovery: true` maintient la taille choisie ; ce réglage peut aider sur un chemin contraint, sans garantir la suppression de toutes les pertes.
+
+Les correctifs portent sur la cadence BBR, l'agrégation des ACK et une course dans la dérivation de clé Salamander. Des tests locaux reproduisent les files saturées, les liaisons lentes et les contraintes MTU. La télémétrie distingue les motifs de perte QUIC et certains acquittements tardifs ; elle ne mesure pas exactement les pertes physiques. Voir [les correctifs et leurs limites](docs/BBR_FIX.md). Pour appliquer un changement sur une installation existante, suivre les [contrôles de mise à jour](docs/OBSERVABILITY.md#contrôles-de-mise-à-jour).
+
 ## Organisation
 
 `native/` contient le fork Go et ses dépendances déclarées ; `src/` le bot, les règles d’accès, la comptabilité et leurs tests ; `scripts/` les outils administratifs ; `deploy/systemd/` les services ; `config/` les modèles ; `tools/` la construction et l’installation.
@@ -44,6 +64,8 @@ make test-native
 ```
 
 La compilation télécharge un outil Go dont la version et le SHA-256 sont fixés dans `config/artifacts.json`. `build/` et `.cache/` ne sont pas versionnés. Les sources Go existantes requièrent actuellement Go 1.21.13 ; une migration vers une chaîne Go maintenue nécessite également la mise à niveau du fork QUIC.
+
+`make test-native` exécute les tests QoS, serveur, congestion, intégration, QUIC et obfuscation avec détection de courses. Les tests de stress sont exclus de cette commande.
 
 ## Installation sur un nouveau serveur
 

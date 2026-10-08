@@ -43,6 +43,8 @@ func NewServer(config *Config) (Server, error) {
 		KeepAlivePeriod:                config.QUICConfig.KeepAlivePeriod,
 		MaxIncomingStreams:             config.QUICConfig.MaxIncomingStreams,
 		DisablePathMTUDiscovery:        config.QUICConfig.DisablePathMTUDiscovery,
+		InitialPacketSize:              config.QUICConfig.InitialPacketSize,
+		UseCubic:                       config.CongestionControl == "cubic",
 		EnableDatagrams:                true,
 	}
 	if config.TransportRegistry != nil {
@@ -151,8 +153,10 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 					h.config.Outbound)
 			}
 			if h.config.IgnoreClientBandwidth {
-				// Ignore client bandwidth, always use BBR
-				congestion.UseBBR(h.conn)
+				// Retain the configured initial controller unless BBR is selected.
+				if h.config.CongestionControl == "bbr" {
+					congestion.UseBBR(h.conn)
+				}
 				actualTx = 0
 			} else {
 				// actualTx = min(serverTx, clientRx)
@@ -164,8 +168,9 @@ func (h *h3sHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				if actualTx > 0 {
 					congestion.UseBrutal(h.conn, actualTx)
 				} else {
-					// Client doesn't know its own bandwidth, use BBR
-					congestion.UseBBR(h.conn)
+					if h.config.CongestionControl == "bbr" {
+						congestion.UseBBR(h.conn)
+					}
 				}
 			}
 			// Auth OK, send response

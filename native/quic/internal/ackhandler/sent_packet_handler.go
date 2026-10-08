@@ -116,6 +116,7 @@ var (
 func newSentPacketHandler(
 	initialPN protocol.PacketNumber,
 	initialMaxDatagramSize protocol.ByteCount,
+	useCubic bool,
 	rttStats *utils.RTTStats,
 	clientAddressValidated bool,
 	enableECN bool,
@@ -127,7 +128,7 @@ func newSentPacketHandler(
 		congestion.DefaultClock{},
 		rttStats,
 		initialMaxDatagramSize,
-		true, // use Reno
+		!useCubic, // Reno remains the default unless CUBIC is explicit.
 		tracer,
 	)
 

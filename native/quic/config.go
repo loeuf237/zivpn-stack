@@ -27,6 +27,9 @@ func validateConfig(config *Config) error {
 	if config == nil {
 		return nil
 	}
+	if config.InitialPacketSize != 0 && (config.InitialPacketSize < protocol.MinInitialPacketSize || config.InitialPacketSize > protocol.MaxPacketBufferSize) {
+		return fmt.Errorf("initial packet size must be between %d and %d", protocol.MinInitialPacketSize, protocol.MaxPacketBufferSize)
+	}
 	const maxStreams = 1 << 60
 	if config.MaxIncomingStreams > maxStreams {
 		config.MaxIncomingStreams = maxStreams
@@ -123,6 +126,8 @@ func populateConfig(config *Config) *Config {
 		TokenStore:                     config.TokenStore,
 		EnableDatagrams:                config.EnableDatagrams,
 		DisablePathMTUDiscovery:        config.DisablePathMTUDiscovery,
+		InitialPacketSize:              config.InitialPacketSize,
+		UseCubic:                       config.UseCubic,
 		Allow0RTT:                      config.Allow0RTT,
 		Tracer:                         config.Tracer,
 	}
