@@ -10,6 +10,7 @@ ZiVPN <-> 3X-UI Bidirectional Synchronization & Advanced Telegram Bot Master Dae
 import sqlite3
 import sys
 sys.path.append("/usr/local/lib")
+from zivpn_sqlite import ClosingConnection
 from zivpn_policy import ACCOUNT_QUERY, access_denial
 import zivpn_qos as qos_policy
 import zivpn_accounting
@@ -65,7 +66,7 @@ def get_admin_ids():
     return admin_ids
 
 def get_db():
-    conn = sqlite3.connect(DB_PATH, timeout=20.0)
+    conn = sqlite3.connect(DB_PATH, timeout=20.0, factory=ClosingConnection)
     conn.row_factory = sqlite3.Row
     return conn
 
@@ -316,7 +317,7 @@ def send_backup_file(chat_id):
         # SQLite backup includes committed WAL data; a raw DB copy does not.
         with tempfile.TemporaryDirectory(prefix="zivpn-backup-") as directory:
             path = os.path.join(directory, "x-ui.db")
-            with sqlite3.connect(DB_PATH, timeout=5) as source, sqlite3.connect(path) as target:
+            with sqlite3.connect(DB_PATH, timeout=5, factory=ClosingConnection) as source, sqlite3.connect(path, factory=ClosingConnection) as target:
                 deadline = time.monotonic() + 15
                 def progress(status, remaining, total):
                     if time.monotonic() > deadline:

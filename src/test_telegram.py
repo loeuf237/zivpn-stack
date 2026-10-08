@@ -5,6 +5,7 @@ import unittest
 from unittest.mock import Mock
 from pathlib import Path
 from zivpn_telegram import Transport, Tasks
+from zivpn_sqlite import ClosingConnection
 
 class TelegramTests(unittest.TestCase):
     def client(self, responses):
@@ -78,7 +79,7 @@ class TelegramTests(unittest.TestCase):
                 checked.append(copied.execute('SELECT value FROM sample').fetchone()[0]);copied.close()
                 return {'ok':False,'error_code':403}
             transport.call.side_effect=call
-            g=dict(sqlite3=sqlite3,tempfile=tempfile,os=os,time=time,DB_PATH=path,TELEGRAM=transport,send_telegram=notice)
+            g=dict(sqlite3=sqlite3,ClosingConnection=ClosingConnection,tempfile=tempfile,os=os,time=time,DB_PATH=path,TELEGRAM=transport,send_telegram=notice)
             exec(compile(ast.Module(body=[node],type_ignores=[]),'backup','exec'),g)
             self.assertFalse(g['send_backup_file'](7));self.assertEqual(checked,['committed-wal']);notice.assert_called_once();db.close()
 

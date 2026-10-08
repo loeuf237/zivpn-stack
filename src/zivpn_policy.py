@@ -2,6 +2,7 @@
 import ipaddress
 from pathlib import Path
 import sqlite3
+from zivpn_sqlite import ClosingConnection
 import subprocess
 import time
 
@@ -70,7 +71,7 @@ def authenticate(address, password, required_tag=None, db_path=DB_PATH, now_ms=N
     now_ms = int(time.time() * 1000) if now_ms is None else now_ms
     try:
         database_uri = Path(db_path).resolve().as_uri() + "?mode=rw"
-        with sqlite3.connect(database_uri, uri=True, timeout=5.0) as conn:
+        with sqlite3.connect(database_uri, uri=True, timeout=5.0, factory=ClosingConnection) as conn:
             conn.row_factory = sqlite3.Row
             accounts = conn.execute(ACCOUNT_QUERY + " WHERE c.password = ?", (password,)).fetchall()
             # A shared password cannot identify an individual account reliably.
