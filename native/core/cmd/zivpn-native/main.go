@@ -141,8 +141,10 @@ func main() {
 	flag.Parse()
 	var config struct {
 		Listen, Cert, Key string
+		CongestionControl string `json:"congestionControl"`
 		QUIC              struct {
-			DisablePathMTUDiscovery bool `json:"disablePathMTUDiscovery"`
+			DisablePathMTUDiscovery bool   `json:"disablePathMTUDiscovery"`
+			InitialPacketSize       uint16 `json:"initialPacketSize"`
 		}
 	}
 	b, e := os.ReadFile(*configPath)
@@ -182,8 +184,10 @@ func main() {
 		config := &server.Config{Conn: obfs.WrapPacketConn(c, o),
 			TLSConfig: server.TLSConfig{Certificates: []tls.Certificate{cert}},
 			QUICConfig: server.QUICConfig{DisablePathMTUDiscovery: config.QUIC.DisablePathMTUDiscovery,
-				MaxIdleTimeout: 60 * time.Second, KeepAlivePeriod: 5 * time.Second},
+				InitialPacketSize: config.QUIC.InitialPacketSize,
+				MaxIdleTimeout:    60 * time.Second, KeepAlivePeriod: 5 * time.Second},
 			IgnoreClientBandwidth: true, Authenticator: authenticator{*helper, *db, port, manager},
+			CongestionControl: config.CongestionControl,
 			TransportRegistry: manager.TransportRegistry,
 			MasqHandler:       http.NotFoundHandler()}
 		config.AuthenticatedOutbound = func(ctx context.Context, id string, addr func() net.Addr, close func(), base server.Outbound) server.Outbound {

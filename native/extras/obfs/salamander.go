@@ -67,5 +67,10 @@ func (o *SalamanderObfuscator) Deobfuscate(in, out []byte) int {
 }
 
 func (o *SalamanderObfuscator) key(salt []byte) [smKeyLen]byte {
-	return blake2b.Sum256(append(o.PSK, salt...))
+	// Read and write paths share this obfuscator. Never append into the
+	// backing array of PSK: spare capacity would race and corrupt packets.
+	input := make([]byte, len(o.PSK)+len(salt))
+	copy(input, o.PSK)
+	copy(input[len(o.PSK):], salt)
+	return blake2b.Sum256(input)
 }

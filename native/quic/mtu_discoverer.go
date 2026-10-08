@@ -41,6 +41,13 @@ func getMaxPacketSize(addr net.Addr) protocol.ByteCount {
 	return maxSize
 }
 
+func getInitialPacketSize(addr net.Addr, config *Config) protocol.ByteCount {
+	if config.InitialPacketSize != 0 {
+		return protocol.ByteCount(config.InitialPacketSize)
+	}
+	return getMaxPacketSize(addr)
+}
+
 type mtuFinder struct {
 	lastProbeTime time.Time
 	mtuIncreased  func(protocol.ByteCount)

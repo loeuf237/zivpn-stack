@@ -27,12 +27,15 @@ type Config struct {
 	Outbound              Outbound
 	BandwidthConfig       BandwidthConfig
 	IgnoreClientBandwidth bool
-	DisableUDP            bool
-	UDPIdleTimeout        time.Duration
-	Authenticator         Authenticator
-	EventLogger           EventLogger
-	TrafficLogger         TrafficLogger
-	MasqHandler           http.Handler
+	// CongestionControl selects bbr, reno or cubic when client bandwidth is ignored
+	// or unspecified. Empty preserves BBR. Explicit client rates use Brutal.
+	CongestionControl string
+	DisableUDP        bool
+	UDPIdleTimeout    time.Duration
+	Authenticator     Authenticator
+	EventLogger       EventLogger
+	TrafficLogger     TrafficLogger
+	MasqHandler       http.Handler
 	// AuthenticatedOutbound wraps all TCP/UDP streams of an authenticated
 	// QUIC connection. Identity survives source-port and address migration.
 	AuthenticatedOutbound func(context.Context, string, func() net.Addr, func(), Outbound) Outbound
@@ -41,6 +44,12 @@ type Config struct {
 // fill fills the fields that are not set by the user with default values when possible,
 // and returns an error if the user has not set a required field, or if a field is invalid.
 func (c *Config) fill() error {
+	if c.CongestionControl == "" {
+		c.CongestionControl = "bbr"
+	}
+	if c.CongestionControl != "bbr" && c.CongestionControl != "reno" && c.CongestionControl != "cubic" {
+		return errors.ConfigError{Field: "CongestionControl", Reason: "must be bbr, reno or cubic"}
+	}
 	if len(c.TLSConfig.Certificates) == 0 && c.TLSConfig.GetCertificate == nil {
 		return errors.ConfigError{Field: "TLSConfig", Reason: "must set at least one of Certificates or GetCertificate"}
 	}
@@ -78,6 +87,9 @@ func (c *Config) fill() error {
 		return errors.ConfigError{Field: "QUICConfig.MaxIncomingStreams", Reason: "must be at least 8"}
 	}
 	c.QUICConfig.DisablePathMTUDiscovery = c.QUICConfig.DisablePathMTUDiscovery || pmtud.DisablePathMTUDiscovery
+	if n := c.QUICConfig.InitialPacketSize; n != 0 && (n < 1200 || n > 1452) {
+		return errors.ConfigError{Field: "QUICConfig.InitialPacketSize", Reason: "must be between 1200 and 1452"}
+	}
 	if c.Conn == nil {
 		return errors.ConfigError{Field: "Conn", Reason: "must be set"}
 	}
@@ -109,6 +121,7 @@ type TLSConfig struct {
 
 // QUICConfig contains the QUIC configuration fields that we want to expose to the user.
 type QUICConfig struct {
+	InitialPacketSize              uint16
 	InitialStreamReceiveWindow     uint64
 	MaxStreamReceiveWindow         uint64
 	InitialConnectionReceiveWindow uint64
