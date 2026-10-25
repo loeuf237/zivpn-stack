@@ -318,6 +318,16 @@ class LifecycleTests(unittest.TestCase):
             updater.assert_not_called()
             run.assert_not_called()
 
+    def test_obsolete_compatibility_listener_cannot_restart_after_update(self):
+        plan = self.existing_stack()
+        host = Host(self.root)
+        host.original.add('zivpn-limited.service')
+        host.active.add('zivpn-limited.service')
+        host.enabled.add('zivpn-limited.service')
+        SimulatedUpdater(plan, self.root, self.root, host.run).apply('amd64', {})
+        self.assertNotIn('zivpn-limited.service', host.active)
+        self.assertNotIn('zivpn-limited.service', host.enabled)
+
 
 if __name__ == '__main__':
     unittest.main()

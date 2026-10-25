@@ -401,10 +401,10 @@ class Updater:
             self.command(['systemctl', 'is-active', '--quiet', unit])
 
     def finish(self):
+        for unit in RETIRED:
+            if unit in self.states:
+                self.command(['systemctl', 'disable', unit])
         if self.plan.mode == 'migrate':
-            for unit in RETIRED:
-                if unit in self.states:
-                    self.command(['systemctl', 'disable', unit])
             self.command(['systemctl', 'enable', 'x-ui.service', 'zivpn.service',
                           'zivpn-ports.service', 'zivpn-xui-sync.service'])
             self.command(['systemctl', 'start', 'zivpn-xui-sync.service'])

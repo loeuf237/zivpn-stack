@@ -26,7 +26,7 @@ An update keeps:
 - TLS certificate/key and native listen/congestion settings;
 - Telegram token, administrator identity and deployment settings;
 - existing 3X-UI binary, panel credentials, panel service and network service configuration;
-- systemd drop-ins and the previous active/enabled state of supported services.
+- systemd drop-ins and the previous active/enabled state of the panel, native server and collector. Known obsolete compatibility/forwarding services are retired after successful validation.
 
 Passing new setup files does not replace an existing stack's settings or credentials. Credential rotation is a separate administrative operation.
 
