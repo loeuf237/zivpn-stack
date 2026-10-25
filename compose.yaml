@@ -1,0 +1,36 @@
+services:
+  native:
+    build: .
+    image: zivpn-stack:local
+    # Linux host networking preserves client IPs for Standard per-IP limits.
+    network_mode: host
+    restart: unless-stopped
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    stop_grace_period: 45s
+    volumes:
+      - type: bind
+        source: ${ZIVPN_CONFIG_DIR:?Set ZIVPN_CONFIG_DIR to a private native config directory}
+        target: /etc/zivpn
+        read_only: true
+        bind:
+          create_host_path: false
+      # Directory mount keeps SQLite WAL/SHM files visible and writable.
+      - type: bind
+        source: ${ZIVPN_DB_DIR:?Set ZIVPN_DB_DIR to the 3X-UI database directory}
+        target: /etc/x-ui
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${ZIVPN_RUN_DIR:-/run/zivpn-container}
+        target: /run
+        bind:
+          create_host_path: false
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,size=16m
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
