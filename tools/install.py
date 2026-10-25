@@ -1,9 +1,7 @@
 #!/usr/bin/env python3
-"""Install the full stack on a new Ubuntu/Debian systemd server.
-
-Refuses existing installations. Never run this to upgrade a live server.
-"""
+"""Install, update or migrate a supported ZiVPN host with private backups."""
 import argparse
+from contextlib import nullcontext
 import json
 import os
 from pathlib import Path
@@ -16,6 +14,8 @@ import sys
 import tempfile
 
 from download import archive
+from preflight import assess_host
+from lifecycle import plan_installation, Updater, UpdateFailure, deployment_lock
 ROOT=Path(__file__).resolve().parents[1]
 sys.path.insert(0,str(ROOT/'src'))
 from zivpn_settings import load_settings
@@ -29,6 +29,23 @@ def install_file(source,target,mode=0o600):
     target=Path(target);target.parent.mkdir(parents=True,exist_ok=True)
     temporary=target.with_name(target.name+'.new')
     shutil.copyfile(source,temporary);temporary.chmod(mode);os.replace(temporary,target)
+
+
+def runtime_files():
+    files = [(path, '/usr/local/lib/' + path.name, 0o600)
+             for path in (ROOT / 'src').glob('zivpn_*.py')]
+    files += [(ROOT / 'src/zivpn-xui-sync.py', '/usr/local/bin/zivpn-xui-sync.py', 0o700),
+              (ROOT / 'src/zivpn-expire-account.py', '/usr/local/bin/zivpn-expire-account', 0o700),
+              (ROOT / 'build/zivpn-native', '/usr/local/bin/zivpn-native', 0o700)]
+    for name, target in [('zivpn-native-auth.py', '/usr/local/sbin/zivpn-native-auth'),
+                         ('zivpn-native-save-traffic', '/usr/local/sbin/zivpn-native-save-traffic'),
+                         ('zivpn-ports', '/usr/local/sbin/zivpn-ports'),
+                         ('zivpn-set-telegram-token', '/usr/local/sbin/zivpn-set-telegram-token'),
+                         ('auto-cleanup-logs.sh', '/usr/local/bin/auto-cleanup-logs.sh')]:
+        files.append((ROOT / 'scripts' / name, target, 0o700))
+    files += [(path, '/etc/systemd/system/' + path.name, 0o644)
+              for path in (ROOT / 'deploy/systemd').glob('*.service')]
+    return files
 
 
 def seed_database(path,config,private):
@@ -69,22 +86,46 @@ def validate_private(path):
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--settings',required=True)
-    parser.add_argument('--secrets',required=True)
-    parser.add_argument('--check',action='store_true',help='Validate prerequisites without making changes')
+    parser.add_argument('--settings',help='Required for a new install or legacy migration; existing stack settings are preserved')
+    parser.add_argument('--secrets',help='Private setup credentials for a new install or legacy migration')
+    parser.add_argument('--legacy-profile',choices=['standard','premium'],default='standard',
+                        help='Profile for imported legacy passwords (default: standard, 1 MB/s per IP)')
+    parser.add_argument('--check',action='store_true',help='Report the planned install/update/migration without making changes')
     args=parser.parse_args()
-    config=load_settings(args.settings);private=validate_private(args.secrets)
+    if os.geteuid()!=0:raise SystemExit('Run as root; --check also needs read access to services and firewall state.')
     arch={'x86_64':'amd64','aarch64':'arm64'}.get(platform.machine())
     if not arch:raise SystemExit('Supported architectures: amd64, arm64')
     if not Path('/run/systemd/system').exists():raise SystemExit('systemd is required')
     os_release=Path('/etc/os-release').read_text()
     if not any(line in os_release.splitlines() for line in ['ID=ubuntu','ID=debian']):
         raise SystemExit('This installer supports Ubuntu and Debian only')
-    for path in ['/etc/zivpn/config.json','/etc/x-ui/x-ui.db','/usr/local/bin/zivpn-native','/usr/local/x-ui/x-ui']:
-        if Path(path).exists():raise SystemExit('Existing installation detected; refusing to overwrite: '+path)
-    print('Preflight passed. Target: Linux '+arch+' / systemd; fresh installation only.')
+    with nullcontext() if args.check else deployment_lock():
+        deploy(args,arch)
+
+
+def deploy(args,arch):
+    # Both --check and installation fail closed before reading private inputs,
+    # downloading artifacts, running apt, or creating any installation files.
+    plan=plan_installation(assess_host())
+    print('Planned action: '+plan.mode+'; target Linux '+arch+' / systemd.')
+    if plan.mode=='migrate':
+        print(f'Import {len(plan.passwords)} unique legacy passwords into {args.legacy_profile} accounts; keep TLS certificates.')
+    if plan.mode=='update':
+        config=load_settings();private=None
+        print('Keep existing accounts, quotas, counters, TLS, panel credentials, Telegram token and deployment settings.')
+    elif args.settings and args.secrets:
+        config=load_settings(args.settings);private=validate_private(args.secrets)
+    elif args.check and not args.settings and not args.secrets:
+        print('Conflict inspection complete. Supply --settings and --secrets when applying this plan.')
+        return
+    else:
+        raise SystemExit('--settings and --secrets are required for a new install or legacy migration')
     if args.check:return
-    if os.geteuid()!=0:raise SystemExit('Run as root on the NEW target server')
+    if plan.mode!='install':
+        print('Preparing the update before a brief service interruption; a private rollback backup will be retained.')
+        backup=Updater(plan,ROOT).apply(arch,config,private,args.legacy_profile)
+        print('Update completed. Private backup: '+str(backup))
+        return
     run(['apt-get','update'],timeout=180)
     run(['apt-get','install','-y','python3','python3-venv','python3-bcrypt','openssl','ca-certificates','iptables','iproute2','conntrack','ipset','git','make','gcc'],timeout=300)
     run([sys.executable,str(ROOT/'tools/build.py'),'--arch',arch],timeout=600)
@@ -101,15 +142,7 @@ def main():
     seed_database('/etc/x-ui/x-ui.db',config,private)
     run([sys.executable,'-m','venv','/opt/zivpn/venv'])
     run(['/opt/zivpn/venv/bin/pip','install','-r',str(ROOT/'requirements.txt')],timeout=300)
-    for source in (ROOT/'src').glob('zivpn_*.py'):install_file(source,'/usr/local/lib/'+source.name)
-    install_file(ROOT/'src/zivpn-xui-sync.py','/usr/local/bin/zivpn-xui-sync.py',0o700)
-    install_file(ROOT/'src/zivpn-expire-account.py','/usr/local/bin/zivpn-expire-account',0o700)
-    install_file(ROOT/'scripts/zivpn-native-auth.py','/usr/local/sbin/zivpn-native-auth',0o700)
-    install_file(ROOT/'scripts/zivpn-native-save-traffic','/usr/local/sbin/zivpn-native-save-traffic',0o700)
-    install_file(ROOT/'scripts/zivpn-ports','/usr/local/sbin/zivpn-ports',0o700)
-    install_file(ROOT/'scripts/zivpn-set-telegram-token','/usr/local/sbin/zivpn-set-telegram-token',0o700)
-    install_file(ROOT/'scripts/auto-cleanup-logs.sh','/usr/local/bin/auto-cleanup-logs.sh',0o700)
-    install_file(ROOT/'build/zivpn-native','/usr/local/bin/zivpn-native',0o700)
+    for source,target,mode in runtime_files():install_file(source,target,mode)
     config_path=Path('/etc/zivpn/settings.json');config_path.write_text(json.dumps(config,indent=2)+'\n');config_path.chmod(0o600)
     token=Path('/etc/zivpn/telegram.token');token.write_text(private['telegram_token']+'\n');token.chmod(0o600)
     run(['openssl','req','-x509','-nodes','-newkey','rsa:2048','-keyout','/etc/zivpn/zivpn.key',
@@ -119,7 +152,6 @@ def main():
     p=Path('/etc/zivpn/config.json');p.write_text(json.dumps(vpn,indent=2)+'\n');p.chmod(0o600)
     p=Path('/etc/zivpn/native-qos.enabled');p.write_text('authenticated-payload-qos-v1\n');p.chmod(0o600)
     p=Path('/etc/zivpn/clients.csv');p.write_text('client,password\n');p.chmod(0o600)
-    for source in (ROOT/'deploy/systemd').glob('*.service'):install_file(source,'/etc/systemd/system/'+source.name,0o644)
     run(['systemctl','daemon-reload'])
     run(['systemctl','enable','--now','x-ui','zivpn-ports','zivpn','zivpn-xui-sync'])
     run(['systemctl','is-active','x-ui','zivpn','zivpn-xui-sync'])
@@ -127,6 +159,9 @@ def main():
 
 if __name__=='__main__':
     try:main()
+    except UpdateFailure as error:
+        print(str(error),file=sys.stderr)
+        sys.exit(1)
     except Exception as error:
         print('Installation failed: '+type(error).__name__+'; inspect services and retained files before retrying.',file=sys.stderr)
         sys.exit(1)

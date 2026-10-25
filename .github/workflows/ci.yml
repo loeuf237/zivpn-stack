@@ -44,6 +44,8 @@ jobs:
           uv run --locked python -m compileall -q src scripts tools deploy/docker
           bash -n scripts/zivpn-ports scripts/auto-cleanup-logs.sh
           sh -n deploy/docker/entrypoint.sh
+      - name: Verify legacy import against the pinned 3X-UI schema
+        run: uv run --locked python tools/panel_migration_smoke.py
 
   native:
     runs-on: ubuntu-24.04
