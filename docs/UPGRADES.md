@@ -49,7 +49,7 @@ Standard defaults to 1,000,000 bytes/s per public IP; `--legacy-profile premium`
 
 The existing listen configuration and TLS certificate/key are retained. A new checksum-pinned 3X-UI panel/database and Python environment are staged privately. Only the known local UDP 6000–19999-to-5667 DNAT rule is replaced with the stack's managed port aliases. Supported obsolete compatibility/forwarding services are retired after validation. The legacy binary remains available for recovery.
 
-An independent pre-existing 3X-UI installation is not silently reseeded or merged. HTTP/custom authentication, nonstandard legacy listeners, manually managed competing processes and Docker host replacements need an explicit migration plan. Existing native Docker deployments are updated using `docker compose up -d --build`, not by replacing their host with systemd services.
+An independent pre-existing 3X-UI installation is not silently reseeded or merged. HTTP/custom authentication, nonstandard or dual legacy listeners (`config-limited.json`), manually managed competing processes and Docker host replacements need an explicit migration plan. Existing native Docker deployments are updated using `docker compose up -d --build`, not by replacing their host with systemd services.
 
 ## Preparation, switch and recovery
 

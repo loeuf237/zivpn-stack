@@ -99,6 +99,8 @@ def plan_installation(report, root=Path('/'), validate_tls=True):
             raise SystemExit('Existing ZiVPN layout is not a supported password-based legacy installation; no changes made.')
         if database.exists() or (root / 'usr/local/x-ui/x-ui').exists():
             raise SystemExit('Legacy ZiVPN and an independent 3X-UI installation coexist; an explicit database migration is needed. No changes made.')
+        if (root / 'etc/zivpn/config-limited.json').exists():
+            raise SystemExit('A dual-listener legacy layout needs an explicit per-profile import; no accounts or settings were changed.')
         plan = Plan('migrate', list(dict.fromkeys(passwords)), cfg)
         csv_path = root / 'etc/zivpn/clients.csv'
         if csv_path.exists():

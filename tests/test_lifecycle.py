@@ -341,6 +341,12 @@ class LifecycleTests(unittest.TestCase):
         self.assertIn('original-name,fixture-legacy', text)
         self.assertNotIn('fixture-revoked', text)
 
+    def test_unknown_dual_legacy_profile_is_not_silently_dropped(self):
+        self.legacy()
+        self.write('etc/zivpn/config-limited.json', '{"auth":{"mode":"passwords","config":["fixture-premium"]}}')
+        with self.assertRaisesRegex(SystemExit, 'per-profile import'):
+            plan_installation(Report(), self.root, validate_tls=False)
+
 
 if __name__ == '__main__':
     unittest.main()
