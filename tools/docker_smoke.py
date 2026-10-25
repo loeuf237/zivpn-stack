@@ -45,7 +45,6 @@ def fixtures(root):
         'listen': ':5667', 'cert': '/etc/zivpn/zivpn.crt',
         'key': '/etc/zivpn/zivpn.key',
     }))
-    (config / 'native-qos.enabled').write_text('authenticated-payload-qos-v1\n')
     for path in config.iterdir():
         path.chmod(0o600)
     (database / 'x-ui.db').chmod(0o600)

@@ -14,7 +14,6 @@
 !src/zivpn_*.py
 !scripts/
 !scripts/zivpn-native-auth.py
-!scripts/zivpn-native-save-traffic
 !deploy/
 !deploy/docker/
 !deploy/docker/entrypoint.sh

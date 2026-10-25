@@ -7,7 +7,7 @@ umask 077
 shutdown() {
     trap '' TERM INT
     stopping=1
-    /usr/local/sbin/zivpn-native-save-traffic || \
+    python3 -c 'import os; from zivpn_native_accounting import sync_traffic; sync_traffic(os.environ.get("ZIVPN_NATIVE_DB", "/etc/x-ui/x-ui.db"))' || \
         echo 'Final traffic sample failed; inspect container logs.' >&2
     kill -TERM "$server_pid" 2>/dev/null || true
 }

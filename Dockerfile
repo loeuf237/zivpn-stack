@@ -26,7 +26,6 @@ COPY --from=python-build /opt/zivpn/.venv /opt/zivpn/.venv
 COPY --from=native-build /build/build/zivpn-native /usr/local/bin/zivpn-native
 COPY src/zivpn_*.py /usr/local/lib/
 COPY --chmod=755 scripts/zivpn-native-auth.py /usr/local/sbin/zivpn-native-auth
-COPY --chmod=755 scripts/zivpn-native-save-traffic /usr/local/sbin/zivpn-native-save-traffic
 COPY --chmod=755 deploy/docker/entrypoint.sh /usr/local/bin/docker-entrypoint
 COPY deploy/docker/healthcheck.py /usr/local/lib/zivpn_container_healthcheck.py
 EXPOSE 5667/udp 5668/udp
