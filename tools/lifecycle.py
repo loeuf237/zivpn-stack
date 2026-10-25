@@ -2,9 +2,11 @@
 from dataclasses import dataclass, field
 from contextlib import closing
 from contextlib import contextmanager
+import csv
 import fcntl
 import json
 import os
+import re
 from pathlib import Path
 import shlex
 import shutil
@@ -45,6 +47,7 @@ class Plan:
     mode: str
     passwords: list = field(default_factory=list, repr=False)
     config: dict = field(default_factory=dict, repr=False)
+    names: dict = field(default_factory=dict, repr=False)
 
 
 def read_json(path):
@@ -97,6 +100,26 @@ def plan_installation(report, root=Path('/'), validate_tls=True):
         if database.exists() or (root / 'usr/local/x-ui/x-ui').exists():
             raise SystemExit('Legacy ZiVPN and an independent 3X-UI installation coexist; an explicit database migration is needed. No changes made.')
         plan = Plan('migrate', list(dict.fromkeys(passwords)), cfg)
+        csv_path = root / 'etc/zivpn/clients.csv'
+        if csv_path.exists():
+            try:
+                with csv_path.open(newline='') as source:
+                    rows = csv.DictReader(source)
+                    if rows.fieldnames != ['client', 'password']:
+                        raise ValueError('header')
+                    for row in rows:
+                        name, password = row['client'], row['password']
+                        if password not in plan.passwords:
+                            continue  # Do not re-enable a password absent from legacy auth.
+                        if not re.fullmatch(r'[A-Za-z0-9_.@-]{1,128}', name):
+                            raise ValueError('name')
+                        if password in plan.names and plan.names[password] != name:
+                            raise ValueError('ambiguous identity')
+                        if name in plan.names.values() and plan.names.get(password) != name:
+                            raise ValueError('duplicate name')
+                        plan.names[password] = name
+            except (OSError, ValueError, KeyError, TypeError, csv.Error):
+                raise SystemExit('Legacy clients.csv needs an identity review before migration; no passwords were changed.') from None
     else:
         report.require_clean()
         return Plan('install')
@@ -143,9 +166,10 @@ def plan_installation(report, root=Path('/'), validate_tls=True):
     return plan
 
 
-def import_legacy_accounts(path, passwords, profile):
+def import_legacy_accounts(path, passwords, profile, names=None):
     """One stable account per unique password; never log or reset a password."""
     from zivpn_qos import PROFILES, ensure_schema
+    names = names or {}
     with closing(sqlite3.connect(path)) as db, db:
         db.execute('BEGIN IMMEDIATE')
         ensure_schema(db)
@@ -156,7 +180,13 @@ def import_legacy_accounts(path, passwords, profile):
         for index, password in enumerate(dict.fromkeys(passwords), 1):
             if db.execute('SELECT 1 FROM clients WHERE password=?', (password,)).fetchone():
                 continue  # Repeating the import cannot duplicate or reset accounts.
-            name = f'legacy-{index:04d}'
+            name = names.get(password)
+            if name is None:
+                while True:
+                    name = f'legacy-{index:04d}'
+                    if name not in names.values() and not db.execute('SELECT 1 FROM clients WHERE email=?', (name,)).fetchone():
+                        break
+                    index += 1
             if db.execute('SELECT 1 FROM clients WHERE email=?', (name,)).fetchone():
                 raise ValueError('Legacy account name already exists')
             cursor = db.execute('INSERT INTO clients (email,password,enable,total_gb,expiry_time,created_at,updated_at) '
@@ -306,7 +336,7 @@ class Updater:
                           '-webBasePath', '/' + uuid.uuid4().hex + '/'],
                          env=dict(os.environ, XUI_DB_FOLDER=str(self.database)))
             seed_database(self.database / 'x-ui.db', config, private)
-            import_legacy_accounts(self.database / 'x-ui.db', self.plan.passwords, profile)
+            import_legacy_accounts(self.database / 'x-ui.db', self.plan.passwords, profile, self.plan.names)
 
     def snapshot(self):
         self.backup = Backup(self.root, self.workspace / 'backup')
@@ -360,6 +390,15 @@ class Updater:
             shutil.copytree(self.panel, self.root / 'usr/local/x-ui', dirs_exist_ok=True)
             (self.root / 'etc/x-ui').mkdir(parents=True, exist_ok=True, mode=0o700)
             install_file(self.database / 'x-ui.db', self.root / 'etc/x-ui/x-ui.db')
+            # The bot imports clients.csv on startup. Keep it aligned with the
+            # imported identities instead of resurrecting duplicate passwords.
+            export = self.workspace / 'clients.csv'
+            with closing(sqlite3.connect(self.database / 'x-ui.db')) as db, export.open('w', newline='') as output:
+                writer = csv.writer(output)
+                writer.writerow(['client', 'password'])
+                writer.writerows(db.execute('SELECT email,password FROM clients ORDER BY id'))
+            export.chmod(0o600)
+            install_file(export, directory / 'clients.csv')
             (directory / 'settings.json').write_text(json.dumps(config, indent=2) + '\n')
             (directory / 'settings.json').chmod(0o600)
             (directory / 'telegram.token').write_text(private['telegram_token'] + '\n')

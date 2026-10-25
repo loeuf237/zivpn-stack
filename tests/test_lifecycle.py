@@ -107,7 +107,7 @@ class SimulatedUpdater(Updater):
             (self.panel / 'x-ui').write_text('new-panel')
             self.database = self.workspace / 'database'
             database(self.database / 'x-ui.db')
-            import_legacy_accounts(self.database / 'x-ui.db', self.plan.passwords, profile)
+            import_legacy_accounts(self.database / 'x-ui.db', self.plan.passwords, profile, self.plan.names)
 
     def validate_runtime(self):
         if self.add_traffic_before_failure:
@@ -327,6 +327,19 @@ class LifecycleTests(unittest.TestCase):
         SimulatedUpdater(plan, self.root, self.root, host.run).apply('amd64', {})
         self.assertNotIn('zivpn-limited.service', host.active)
         self.assertNotIn('zivpn-limited.service', host.enabled)
+
+    def test_legacy_csv_names_are_kept_without_reimporting_duplicate_passwords(self):
+        self.legacy()
+        self.write('etc/zivpn/clients.csv', 'client,password\noriginal-name,fixture-legacy\nrevoked-name,fixture-revoked\n')
+        plan = plan_installation(Report(), self.root, validate_tls=False)
+        host = Host(self.root, 'migrate')
+        SimulatedUpdater(plan, self.root, self.root, host.run).apply('amd64', {}, {'telegram_token': 'fixture-token'})
+        with closing(sqlite3.connect(self.root / 'etc/x-ui/x-ui.db')) as db:
+            self.assertEqual(db.execute("SELECT email FROM clients WHERE password='fixture-legacy'").fetchall(), [('original-name',)])
+            self.assertIsNone(db.execute("SELECT 1 FROM clients WHERE password='fixture-revoked'").fetchone())
+        text = (self.root / 'etc/zivpn/clients.csv').read_text()
+        self.assertIn('original-name,fixture-legacy', text)
+        self.assertNotIn('fixture-revoked', text)
 
 
 if __name__ == '__main__':

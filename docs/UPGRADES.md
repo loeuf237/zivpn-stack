@@ -43,7 +43,7 @@ sudo python3 tools/install.py --settings /root/zivpn-config/settings.json \
   --secrets /root/zivpn-config/secrets.json --legacy-profile standard
 ```
 
-Each unique legacy password becomes one enabled account named `legacy-0001`, `legacy-0002`, etc. Duplicate password entries are deduplicated; the passwords themselves remain unchanged so existing client credentials remain usable. The original script stores no per-account quotas or traffic history, so imported accounts start with no expiry or quota and zero counters. No historical usage is invented.
+Each unique legacy password becomes one enabled account. An unambiguous existing `clients.csv` supplies its original account name; otherwise names are generated as `legacy-0001`, `legacy-0002`, etc. The CSV is aligned with the imported identities so the bot cannot re-import aliases with duplicate passwords. Passwords absent from the active legacy authentication list are not re-enabled. Duplicate password entries are deduplicated; the passwords themselves remain unchanged so existing client credentials remain usable. The original script stores no per-account quotas or traffic history, so imported accounts start with no expiry or quota and zero counters. No historical usage is invented.
 
 Standard defaults to 1,000,000 bytes/s per public IP; `--legacy-profile premium` instead selects the 4,000,000 bytes/s per-account default. These are new stack policies, not a claim that the old unlimited server had the same limits.
 
