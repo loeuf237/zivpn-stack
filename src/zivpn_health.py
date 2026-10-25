@@ -3,6 +3,7 @@ import json
 import os
 from pathlib import Path
 import sqlite3
+from zivpn_sqlite import ClosingConnection
 import subprocess
 import threading
 import time
@@ -76,7 +77,7 @@ class Monitor:
         os.chmod(self.path, 0o600)
 
     def connect(self):
-        return sqlite3.connect(self.path, timeout=5)
+        return sqlite3.connect(self.path, timeout=5, factory=ClosingConnection)
 
     def collect(self, native, transport, now=None):
         now = time.time() if now is None else now

@@ -8,6 +8,7 @@ from pathlib import Path
 import re
 import socket
 import sqlite3
+from zivpn_sqlite import ClosingConnection
 import time
 
 SOCKET_PATH = '/run/zivpn-native.sock'
@@ -149,7 +150,7 @@ def sync_traffic(db_path):
         os.fchmod(lock.fileno(), 0o600)
         fcntl.flock(lock, fcntl.LOCK_EX)
         data = snapshot()  # Network read outside the SQLite transaction.
-        with sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=rw', uri=True, timeout=20) as conn:
+        with sqlite3.connect(Path(db_path).resolve().as_uri()+'?mode=rw', uri=True, timeout=20, factory=ClosingConnection) as conn:
             return apply_snapshot(conn, data, int(time.time()*1000))
 
 

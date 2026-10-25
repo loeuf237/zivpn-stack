@@ -11,6 +11,7 @@ import urllib.parse
 import urllib.request
 
 sys.path.append('/usr/local/lib')
+from zivpn_sqlite import ClosingConnection
 DB_PATH = '/etc/x-ui/x-ui.db'
 
 
@@ -31,7 +32,7 @@ def resolve(conn, target):
 def expire_account(target, db_path=DB_PATH, now_ms=None, dry_run=False):
     now_ms = int(time.time()*1000) if now_ms is None else now_ms
     uri = Path(db_path).resolve().as_uri() + ('?mode=ro' if dry_run else '?mode=rw')
-    with sqlite3.connect(uri, uri=True, timeout=10) as conn:
+    with sqlite3.connect(uri, uri=True, timeout=10, factory=ClosingConnection) as conn:
         if not dry_run:
             conn.execute('BEGIN IMMEDIATE')
         account = resolve(conn, target)
