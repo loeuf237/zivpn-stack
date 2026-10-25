@@ -12,7 +12,7 @@ ssh YOUR_SSH_USER@YOUR_SERVER_IP
 
 Once connected, the terminal commands run on the remote server. The README assumes a sudo-enabled user. If you are logged in as root, omit `sudo`.
 
-Use a supported Ubuntu 24.04 or Debian 12 server with systemd and public IPv4. A Docker container or your Windows terminal itself is not a full-stack installation target. For the native-only Docker deployment, follow [DOCKER.md](DOCKER.md).
+Use a supported x86-64 (amd64) or ARM64 Ubuntu 24.04 or Debian 12 server with systemd and public IPv4. A Docker container or your Windows terminal itself is not a full-stack installation target. For the native-only Docker deployment, follow [DOCKER.md](DOCKER.md).
 
 ## Create the bot and prepare private files
 

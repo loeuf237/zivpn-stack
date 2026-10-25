@@ -23,7 +23,7 @@ Both profiles use **UDP 5667**. UDP 5668 is an optional compatibility listener f
 
 ### 1. Prepare your server and Telegram bot
 
-Use an Ubuntu 24.04 or Debian 12 **server VM**, with systemd, a public IPv4 address, and a sudo-enabled SSH account. Run the commands below **on that server**, not on your personal computer. If you log in as root, omit `sudo`.
+Use an x86-64 (amd64) or ARM64 Ubuntu 24.04 or Debian 12 **server VM**, with systemd, a public IPv4 address, and a sudo-enabled SSH account. Run the commands below **on that server**, not on your personal computer. If you log in as root, omit `sudo`.
 
 For a new installation or legacy migration, have these ready. If your ZiVPN Stack is already configured, keep its current bot/credentials and proceed to step 2:
 
