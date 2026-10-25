@@ -11,7 +11,7 @@ import sqlite3
 from zivpn_sqlite import ClosingConnection
 import time
 
-SOCKET_PATH = '/run/zivpn-native.sock'
+SOCKET_PATH = os.environ.get('ZIVPN_NATIVE_SOCKET', '/run/zivpn-native.sock')
 
 
 class UnixHTTPConnection(http.client.HTTPConnection):

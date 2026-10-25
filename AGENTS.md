@@ -6,7 +6,7 @@
 
 ## Build, Test, and Development Commands
 
-Create a virtual environment and install `requirements.txt` before Python development. Run `make test` with that environment active for Python policy, accounting, Telegram, and deployment checks. `make build` downloads the checksum-pinned Go toolchain and builds `build/zivpn-native`. `make test-native` runs race-enabled QoS and tunnel integration tests. `make check` checks staged secrets, Python syntax, and the port script syntax. Never execute `tools/install.py` against an existing production installation.
+Use uv 0.13.1 and `uv sync --locked --python 3.12` before Python development. Run `uv run --locked make test` for Python policy, accounting, Telegram, and deployment checks. `pyproject.toml` and `uv.lock` are authoritative; regenerate the installer compatibility file with `uv export --locked --no-dev --no-hashes --no-emit-project --output-file requirements.txt` after dependency changes. `make build` downloads the checksum-pinned Go toolchain and builds `build/zivpn-native`. `make test-native` runs race-enabled QoS and tunnel integration tests. `make check` checks staged secrets, Python syntax, and shell syntax. Build the native-only Docker image with `docker build -t zivpn-stack:local .` and verify it with `python3 tools/docker_smoke.py zivpn-stack:local`. Never execute `tools/install.py` against an existing production installation.
 
 ## Coding Style & Naming Conventions
 

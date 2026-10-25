@@ -11,5 +11,6 @@ test-native: build
 
 check:
 	python3 tools/secret_scan.py --staged
-	python3 -m compileall -q src scripts tools
-	bash -n scripts/zivpn-ports
+	python3 -m compileall -q src scripts tools deploy/docker
+	bash -n scripts/zivpn-ports scripts/auto-cleanup-logs.sh
+	sh -n deploy/docker/entrypoint.sh

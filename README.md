@@ -1,25 +1,77 @@
 # ZiVPN Stack
 
-Serveur UDP compatible avec l’application Android ZiVPN, administration 3X-UI et bot Telegram. Le code du serveur natif, les outils et les tests sont versionnés ; les données des utilisateurs et les secrets restent sur chaque serveur.
+[![Validation](https://github.com/loeuf237/zivpn-stack/actions/workflows/ci.yml/badge.svg)](https://github.com/loeuf237/zivpn-stack/actions/workflows/ci.yml)
 
-## Fonctionnement
+A native UDP server compatible with the ZiVPN Android client, with 3X-UI account management and private Telegram administration. This repository contains the server, deployment tools and tests. User databases, private keys and credentials stay on each server.
 
-- Tous les comptes Android utilisent UDP **5667**. UDP 5668 sert à la compatibilité Premium.
-- Standard : **1 000 000 octets/s par adresse IP publique par défaut**, partagés entre les tunnels et comptes de cette IP.
-- Premium : **4 000 000 octets/s par compte par défaut**, partagés entre ses adresses et tunnels.
-- Le profil est choisi explicitement à la création ; `/profil` le modifie et `/vitesse` personnalise le plafond. Si plusieurs comptes Standard partagent une IP, le plafond le plus bas des comptes connectés s’applique.
-- Les plafonds combinent émission et réception. Les quotas et dates d’expiration viennent de 3X-UI.
-- Les sessions et compteurs sont exposés uniquement via un socket Unix privé.
-- Le bot propose rapports, gestion des comptes, diagnostics annulables et suivi `/taches`.
-- Les observations de destinations et DNS durent au plus 30 minutes en mémoire. Elles ne déchiffrent pas HTTPS et ne prouvent pas l’utilisation d’une application.
+## Features
 
-## Gérer les comptes depuis Telegram
+- **Standard:** a default combined upload/download limit of **1,000,000 bytes/s per public IP**, shared across that IP's accounts and tunnels.
+- **Premium:** a default combined limit of **4,000,000 bytes/s per account**, shared across its IPs and tunnels.
+- Explicit account profiles and persistent per-account speed overrides. When several Standard accounts share an IP, the lowest connected account limit applies.
+- Quotas and expiry dates enforced against the private 3X-UI SQLite database.
+- A private Unix socket for native sessions, accounting and health metrics; no public administration API.
+- Telegram account management, reports, cancellable diagnostics and task tracking.
+- BBR, Reno and CUBIC congestion control, plus configurable QUIC packet sizing.
+- Locked Python dependencies with **uv**, a native-server **Docker image**, and GitHub Actions validation.
 
-Les commandes suivantes sont réservées à l’administrateur principal dans sa conversation privée avec le bot. Remplacer les mots de passe fictifs par des valeurs uniques.
+Both profiles use **UDP 5667**. UDP 5668 is an optional compatibility listener for older Premium profiles. Bandwidth values are shared ceilings, not guaranteed throughput; 1 MB/s means 1,000,000 bytes/s.
+
+## Get started with development
+
+Use Linux, Python 3.10 or newer, Git, Make and [uv 0.13.1](https://docs.astral.sh/uv/getting-started/installation/). Native race tests also require a C compiler.
+
+```bash
+git clone https://github.com/loeuf237/zivpn-stack.git
+cd zivpn-stack
+uv sync --locked --python 3.12
+uv run --locked make test
+uv run --locked make build
+uv run --locked make test-native
+uv run --locked make check
+```
+
+`pyproject.toml` declares the Python dependencies; `uv.lock` locks their full resolution. `uv sync --locked` fails if the manifest and lock disagree. `requirements.txt` is a generated compatibility export for the existing systemd installer, not a separate dependency source.
+
+To update dependencies deliberately:
+
+```bash
+uv lock --upgrade
+uv sync --locked
+uv export --locked --no-dev --no-hashes --no-emit-project --output-file requirements.txt
+uv run --locked make test
+```
+
+The build downloads the Go version and verifies the archive SHA-256 from `config/artifacts.json`. The QUIC fork currently requires **Go 1.21.13**, an old toolchain; upgrading it requires a coordinated fork migration. `make test-native` runs race-enabled QoS, server, congestion, integration, QUIC and obfuscation tests, excluding stress tests. `.venv/`, `.cache/` and `build/` are local artifacts.
+
+## Docker
+
+```bash
+docker build -t zivpn-stack:local .
+python3 tools/docker_smoke.py zivpn-stack:local
+```
+
+The multi-stage image builds the native server with the checksum-pinned Go toolchain and installs Python dependencies from `uv.lock`. It includes the SQLite authentication helper, private-socket health checks and a final traffic sample on graceful shutdown. Build inputs exclude local databases and secrets.
+
+The supplied Compose service runs **the native server only** on Linux with host networking, preserving client IPs for Standard limits. It requires an existing compatible 3X-UI database, a native configuration and TLS files outside the repository. **3X-UI and the Telegram/accounting daemon remain host services.** Their systemd, firewall and host-administration features are not containerized.
+
+Read [the Docker deployment guide](docs/DOCKER.md) before starting Compose, especially the socket/accounting integration and migration steps. Do not start it beside a host server already listening on the same UDP ports. A healthy container confirms process and policy availability, not real Android connectivity or carrier interoperability.
+
+## Install on a new server
+
+The systemd installer remains the full-stack deployment path. See [deployment and migration](docs/DEPLOYMENT.md) for preparation, private configuration, installation and verification. That operational guide currently remains in French.
+
+Intended targets are Ubuntu 24.04 and Debian 12 with Python 3.10+, systemd, IPv4, and x86-64 or ARM64. Open UDP 5667 in both cloud and host firewalls; open UDP 5668 only if legacy clients need it. The panel binds to `127.0.0.1:2053`; access it through an SSH tunnel. The bot uses long polling and needs no incoming webhook port.
+
+The installer refuses existing installations. It verifies the pinned 3X-UI v3.8.5 archive, builds the server and installs the bot without cloning source-server accounts or secrets. **Never run the fresh installer as an upgrade on an existing production server.** Cloud provisioning and firewall rules remain operator responsibilities; the fresh-VM cloud and ARM64 deployment matrix is not fully validated.
+
+## Manage accounts from Telegram
+
+Administrative commands belong in the primary administrator's private chat with the bot. The bot's command names and interface remain in French. Use unique passwords in place of these fictitious examples:
 
 ```text
-/add alice mot-de-passe-unique standard 1
-/add bob autre-mot-de-passe premium 4
+/add alice unique-example-password standard 1
+/add bob another-example-password premium 4
 /vitesse alice 0.75
 /profil alice premium 6
 /vitesse alice defaut
@@ -27,15 +79,21 @@ Les commandes suivantes sont réservées à l’administrateur principal dans sa
 /limit premium 4
 ```
 
-`/add <nom> <mot-de-passe> <standard|premium> [Mo/s]` impose un profil explicite ; sans vitesse, il utilise son plafond par défaut. `/vitesse` modifie le plafond personnalisé ou rétablit son héritage avec `defaut`. `/profil` conserve mot de passe, quotas, expiration et compteurs ; le compte concerné doit se reconnecter. Sans vitesse précisée, un plafond personnalisé existant est conservé. `/limit` modifie les valeurs par défaut sans écraser les plafonds personnalisés.
+| Command | Purpose |
+| --- | --- |
+| `/add <name> <password> <standard\|premium> [MB/s]` | Create an account with an explicit profile. |
+| `/vitesse <name> <MB/s\|defaut>` | Set an account limit or restore inheritance. |
+| `/profil <name> <standard\|premium> [MB/s]` | Change profile while preserving password, quotas, expiry and counters; reconnect the account afterward. |
+| `/limit <standard\|premium> <MB/s>` | Change a profile default without replacing custom account limits. |
+| `/sante 24` or `/sante 48` | Read the available private health history. |
+| `/qualite` | Sample shared throughput and limiter waits for five seconds. |
+| `/taches` | Inspect background tasks. |
 
-Les réglages persistent dans la base privée 3X-UI. Une valeur de **1 Mo/s correspond à 1 000 000 octets/s**. Le plafond représente un maximum partagé, pas une vitesse garantie.
+Changing a profile without a speed argument preserves an existing custom limit. Settings persist in the private 3X-UI database.
 
-## Contrôle de congestion et MTU
+## QUIC congestion control and packet sizing
 
-Le serveur natif accepte `congestionControl` avec les valeurs `bbr`, `reno` et `cubic`. Sans ce réglage, il utilise BBR. Le choix du contrôleur ne modifie pas les plafonds Standard par IP ou Premium par compte. CUBIC utilise l'algorithme déjà présent dans le fork QUIC ; la [documentation des correctifs](docs/BBR_FIX.md) précise sa version d'origine.
-
-Extrait à intégrer à une configuration native complète pour sélectionner CUBIC et limiter la taille des paquets :
+The native configuration accepts `congestionControl: "bbr"`, `"reno"` or `"cubic"`; BBR is the default. Congestion control does not change Standard or Premium policy limits. Merge this fragment into a complete native configuration:
 
 ```json
 {
@@ -47,34 +105,41 @@ Extrait à intégrer à une configuration native complète pour sélectionner CU
 }
 ```
 
-`initialPacketSize` désigne la charge QUIC, hors obfuscation, et accepte les valeurs de 1 200 à 1 452 octets. Zéro ou une valeur absente conserve les tailles initiales par défaut : 1 252 octets en IPv4 et 1 232 en IPv6. Salamander ajoute 8 octets à la charge UDP. `disablePathMTUDiscovery: true` maintient la taille choisie ; ce réglage peut aider sur un chemin contraint, sans garantir la suppression de toutes les pertes.
+`initialPacketSize` is the QUIC payload size before obfuscation, between 1,200 and 1,452 bytes. Zero or omission retains initial defaults of 1,252 bytes for IPv4 and 1,232 for IPv6. Salamander adds 8 bytes to the UDP payload. Disabling path MTU discovery keeps the selected size and may help constrained paths; it does not eliminate every source of loss.
 
-Les correctifs portent sur la cadence BBR, l'agrégation des ACK et une course dans la dérivation de clé Salamander. Des tests locaux reproduisent les files saturées, les liaisons lentes et les contraintes MTU. La télémétrie distingue les motifs de perte QUIC et certains acquittements tardifs ; elle ne mesure pas exactement les pertes physiques. Voir [les correctifs et leurs limites](docs/BBR_FIX.md). Pour appliquer un changement sur une installation existante, suivre les [contrôles de mise à jour](docs/OBSERVABILITY.md#contrôles-de-mise-à-jour).
+See [QUIC fixes and limitations](docs/BBR_FIX.md) for BBR pacing, ACK aggregation, CUBIC provenance and Salamander concurrency fixes. Local tests cover saturated queues, slow links and MTU constraints. Telemetry distinguishes QUIC loss reasons and some late acknowledgements; it does not directly measure physical packet loss.
 
-## Organisation
+## Validation and CI
 
-`native/` contient le fork Go et ses dépendances déclarées ; `src/` le bot, les règles d’accès, la comptabilité et leurs tests ; `scripts/` les outils administratifs ; `deploy/systemd/` les services ; `config/` les modèles ; `tools/` la construction et l’installation.
+Every pull request and push to `main` runs:
 
-```bash
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt
-PATH="$PWD/.venv/bin:$PATH" make test
-make build
-make test-native
-```
+| Job | Checks |
+| --- | --- |
+| `python` | Lockfile/export consistency, Python 3.10 and 3.12 tests, secret scan and syntax checks. |
+| `native` | Checksum-pinned native build and race-enabled Go tests. |
+| `docker` | Compose validation, image build, policy acceptance/rejection, private API health and shutdown accounting smoke test. |
 
-La compilation télécharge un outil Go dont la version et le SHA-256 sont fixés dans `config/artifacts.json`. `build/` et `.cache/` ne sont pas versionnés. Les sources Go existantes requièrent actuellement Go 1.21.13 ; une migration vers une chaîne Go maintenue nécessite également la mise à niveau du fork QUIC.
+The workflow can also be started manually. Its token has read-only repository permissions, and pull requests do not receive deployment credentials or publish images. The `python` and `native` job names remain stable for branch protection; require `docker` as well once the job has run successfully.
 
-`make test-native` exécute les tests QoS, serveur, congestion, intégration, QUIC et obfuscation avec détection de courses. Les tests de stress sont exclus de cette commande.
+Tests use fictitious identities and temporary databases. They do not send Telegram messages or restart production services. Review [validation status](docs/VALIDATION.md) and [observability](docs/OBSERVABILITY.md) before deployment, and follow the existing [upgrade checks](docs/OBSERVABILITY.md#contrôles-de-mise-à-jour) for production changes.
 
-## Installation sur un nouveau serveur
+## Repository layout
 
-Voir [DEPLOYMENT.md](docs/DEPLOYMENT.md). L’installateur refuse d’écraser une installation existante. Il installe 3X-UI v3.8.5 avec vérification SHA-256, construit le serveur, crée les deux catégories de comptes et installe le bot. **Aucun compte VPN ni secret du serveur d’origine n’est cloné.**
+| Path | Contents |
+| --- | --- |
+| `native/` | Go server fork and module manifests. |
+| `src/` | Telegram daemon, account policy, accounting and Python tests. |
+| `scripts/` | Host administration and authentication helpers. |
+| `config/` | Public configuration templates and artifact checksums. |
+| `deploy/` | systemd units and Docker runtime support. |
+| `tools/` | Build, installation, secret scanning and Docker smoke checks. |
+| `tests/` | Deployment and integration checks. |
+| `docs/` | Operational guides and known validation limits. |
 
-Cibles prévues : Ubuntu 24.04 et Debian 12 avec Python ≥ 3.10, systemd, IPv4 et architecture x86-64 ou ARM64. Une VM répondant à ces critères peut être hébergée chez Azure, Google Cloud, AWS, Alibaba Cloud ou un autre fournisseur. La création des ressources et leurs règles réseau restent à configurer chez le fournisseur. La matrice cloud et ARM64 n’a pas encore été validée sur des VM neuves.
+## Security and licenses
 
-Ne lancez pas l’installateur neuf sur la production actuelle. Voir [SECURITY.md](SECURITY.md) pour les exclusions Git et les migrations privées, et [THIRD_PARTY.md](THIRD_PARTY.md) pour les licences.
+Never commit account databases, client exports, tokens, private keys, backups or traffic logs. Run `uv run --locked python tools/secret_scan.py --staged` before committing. The Docker service needs database writes for first-login activation and accounting; do not expose its socket publicly or mount the Docker daemon socket into it.
 
-## Surveillance et validation
+Destination and DNS observations are retained in memory for at most 30 minutes. They do not decrypt HTTPS and do not prove that an application was used. Sensitive reports are reserved for the primary administrator's private chat.
 
-`/sante 24` ou `/sante 48` affiche l’historique disponible ; `/qualite` mesure les débits partagés et les attentes du limiteur pendant cinq secondes. Ces rapports sont réservés à l’administrateur principal en privé. Voir [la surveillance](docs/OBSERVABILITY.md) pour leur interprétation et [l’état de validation](docs/VALIDATION.md) pour les tests et les limites du déploiement portable.
+Read [SECURITY.md](SECURITY.md) for secret handling and private migrations, and [THIRD_PARTY.md](THIRD_PARTY.md) for upstream notices and licenses.

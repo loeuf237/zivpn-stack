@@ -1,22 +1,73 @@
 name: Validation
-on: [push, pull_request]
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
 permissions:
   contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
+  # Keep these names stable: branch protection requires python and native.
   python:
     runs-on: ubuntu-24.04
+    timeout-minutes: 15
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-      - uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1
         with:
-          python-version: '3.12'
-      - run: pip install -r requirements.txt
-      - run: make test
-      - run: python3 tools/secret_scan.py
-      - run: python3 -m compileall -q src scripts tools
-      - run: bash -n scripts/zivpn-ports scripts/auto-cleanup-logs.sh
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c771a70e6277c0a99b617c7a806ffedaca235ff9
+        with:
+          version: '0.13.1'
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Check lockfile and pip export
+        run: |
+          uv lock --check
+          uv export --locked --no-dev --no-hashes --no-emit-project --output-file requirements.txt
+          git diff --exit-code -- requirements.txt uv.lock
+      - name: Test supported Python versions
+        run: |
+          for version in 3.10 3.12; do
+            uv sync --locked --python "$version"
+            uv run --locked --python "$version" make test
+          done
+      - name: Check secrets, Python and shell syntax
+        run: |
+          uv run --locked python tools/secret_scan.py
+          uv run --locked python -m compileall -q src scripts tools deploy/docker
+          bash -n scripts/zivpn-ports scripts/auto-cleanup-logs.sh
+          sh -n deploy/docker/entrypoint.sh
+
   native:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
-      - run: make test-native
+        with:
+          persist-credentials: false
+      - name: Build pinned Go toolchain and run race-enabled tests
+        run: make test-native
+
+  docker:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+        with:
+          persist-credentials: false
+      - name: Validate Compose configuration
+        env:
+          ZIVPN_CONFIG_DIR: /tmp/zivpn-ci/config
+          ZIVPN_DB_DIR: /tmp/zivpn-ci/db
+        run: docker compose config --quiet
+      - name: Build native runtime image
+        run: docker build --tag zivpn-stack:ci .
+      - name: Check startup, policy authentication, health and graceful shutdown
+        run: python3 tools/docker_smoke.py zivpn-stack:ci
