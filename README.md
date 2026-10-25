@@ -57,13 +57,28 @@ The supplied Compose service runs **the native server only** on Linux with host 
 
 Read [the Docker deployment guide](docs/DOCKER.md) before starting Compose, especially the socket/accounting integration and migration steps. Do not start it beside a host server already listening on the same UDP ports. A healthy container confirms process and policy availability, not real Android connectivity or carrier interoperability.
 
-## Install on a new server
+## Install, update or migrate a server
 
 The systemd installer remains the full-stack deployment path. See [deployment and migration](docs/DEPLOYMENT.md) for preparation, private configuration, installation and verification. That operational guide currently remains in French.
 
 Intended targets are Ubuntu 24.04 and Debian 12 with Python 3.10+, systemd, IPv4, and x86-64 or ARM64. Open UDP 5667 in both cloud and host firewalls; open UDP 5668 only if legacy clients need it. The panel binds to `127.0.0.1:2053`; access it through an SSH tunnel. The bot uses long polling and needs no incoming webhook port.
 
-The installer refuses existing installations. It verifies the pinned 3X-UI v3.8.5 archive, builds the server and installs the bot without cloning source-server accounts or secrets. **Never run the fresh installer as an upgrade on an existing production server.** Cloud provisioning and firewall rules remain operator responsibilities; the fresh-VM cloud and ARM64 deployment matrix is not fully validated.
+The installer detects the host before changing installation files:
+
+- **New host:** install the full stack using new private settings and credentials.
+- **Existing supported ZiVPN Stack:** update the server, helpers and Python environment while preserving the database, accounts, quotas, counters, certificates, panel credentials, Telegram token and deployment settings.
+- **The password-based [zahidbd2/udp-zivpn script](https://github.com/zahidbd2/udp-zivpn):** migrate unique passwords into 3X-UI accounts and retain the existing TLS files. Imported accounts use Standard by default; choose `--legacy-profile premium` to change this.
+
+```bash
+# Read-only detection, with no setup secrets required:
+sudo python3 tools/install.py --check
+# Update an already configured stack, preserving its settings and credentials:
+sudo python3 tools/install.py
+```
+
+New installs and legacy migrations additionally require `--settings` and `--secrets`; see [the update and migration guide](docs/UPGRADES.md). Downloads, builds and dependency installation finish before existing services stop. A private backup and runtime rollback protect supported updates. Unrelated port owners, unsupported authentication layouts and failed inspection checks still require review; the installer never kills arbitrary processes or runs an upstream uninstall script.
+
+The pinned panel is 3X-UI v3.8.5; updates to an existing stack retain its panel binary and database rather than downgrading or reseeding them. Cloud provisioning and firewall rules remain operator responsibilities; the fresh-VM cloud and ARM64 deployment matrix is not fully validated.
 
 ## Manage accounts from Telegram
 
@@ -115,7 +130,7 @@ Every pull request and push to `main` runs:
 
 | Job | Checks |
 | --- | --- |
-| `python` | Lockfile/export consistency, Python 3.10 and 3.12 tests, secret scan and syntax checks. |
+| `python` | Lockfile/export consistency, Python 3.10 and 3.12 tests, pinned-panel migration smoke check, secret scan and syntax checks. |
 | `native` | Checksum-pinned native build and race-enabled Go tests. |
 | `docker` | Compose validation, image build, policy acceptance/rejection, private API health and shutdown accounting smoke test. |
 

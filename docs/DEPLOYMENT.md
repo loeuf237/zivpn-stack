@@ -6,6 +6,18 @@ Utiliser une nouvelle VM Ubuntu 24.04 ou Debian 12, x86-64 ou ARM64, avec system
 
 Les services utilisent les chemins Linux habituels ; aucun SDK ni identifiant cloud n’est requis. Les plafonds sont appliqués par le serveur Go, indépendamment des cartes réseau virtuelles des fournisseurs.
 
+## Détecter une installation existante
+
+Avant toute installation ou mise à jour, lancer en root :
+
+```bash
+sudo python3 tools/install.py --check
+```
+
+Ce contrôle ne modifie rien et ne nécessite pas encore de fichiers de secrets. Il sélectionne `install`, `update` ou `migrate` après inspection des fichiers, services, processus, ports, règles NAT et conteneurs Docker. Une stack reconnue est mise à jour ; le script historique `zahidbd2/udp-zivpn` est migré en important ses mots de passe, sans régénérer ses certificats. Voir [UPGRADES.md](UPGRADES.md) pour la sauvegarde, le retour arrière et les limites des configurations prises en charge.
+
+Pour une stack déjà configurée, `sudo python3 tools/install.py` conserve ses paramètres et identifiants. Une migration du script historique a besoin des fichiers `--settings` et `--secrets` pour créer le panneau et le nouveau bot ; le profil importé est Standard par défaut, ou Premium avec `--legacy-profile premium`.
+
 ## Ouvrir les ports
 
 Dans le pare-feu cloud **et** celui de la VM, autoriser UDP 5667. Autoriser UDP 5668 si nécessaire pour d’anciens profils Premium. Les alias UDP 5666, 80, 443, 8080, 8443, 8888 et 6000–30000 sont redirigés vers 5667 ; ouvrir seulement les alias réellement utilisés par les clients.
@@ -33,7 +45,7 @@ sudo python3 tools/install.py --settings /root/zivpn-config/settings.json --secr
 sudo systemctl is-active x-ui zivpn zivpn-xui-sync
 ```
 
-L’installateur ne constitue pas une mise à jour idempotente : si une installation échoue après avoir créé des fichiers, diagnostiquer son état avant de reprendre. Il refuse toute installation existante, même incomplète, pour protéger ses données.
+Les mises à jour et migrations reconnues préparent le nouveau runtime avant l’arrêt des services et conservent une sauvegarde privée. En cas d’échec pendant le basculement, elles tentent de restaurer le runtime précédent. Pour une installation incomplète ou un état ambigu, consulter le diagnostic et les sauvegardes avant de reprendre ; aucun fichier ni service inconnu n’est supprimé automatiquement.
 
 ## Vérifier
 
