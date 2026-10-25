@@ -11,10 +11,14 @@ import time
 
 
 def docker(*args, input=None, check=True):
-    return subprocess.run(
+    result = subprocess.run(
         ['docker', *args], input=input, text=True, capture_output=True,
-        check=check, timeout=90,
+        check=False, timeout=90,
     )
+    if check and result.returncode:
+        print(result.stderr, file=sys.stderr)
+        result.check_returncode()
+    return result
 
 
 def fixtures(root):
@@ -22,6 +26,8 @@ def fixtures(root):
     database = root / 'db'
     config.mkdir()
     database.mkdir()
+    config.chmod(0o700)
+    database.chmod(0o700)
     with sqlite3.connect(database / 'x-ui.db') as db:
         db.executescript("""
             CREATE TABLE clients (id INTEGER PRIMARY KEY, email TEXT,
@@ -57,11 +63,11 @@ def main(image):
         config, database = fixtures(Path(directory))
         try:
             # Fixtures belong to the host CI user. Make only these disposable
-            # files root-owned before testing a runtime with all caps dropped.
+            # paths root-owned before testing a runtime with all caps dropped.
             docker('run', '--rm', '--network', 'none', '--entrypoint', 'python3',
                    '--mount', f'type=bind,src={directory},dst=/fixture', image,
                    '-c', "import os,pathlib; "
-                   "[os.chown(p,0,0) for p in pathlib.Path('/fixture').rglob('*') if p.is_file()]")
+                   "[os.chown(p,0,0) for p in pathlib.Path('/fixture').rglob('*')]")
             docker('run', '-d', '--name', name, '--network', 'none',
                    '--read-only', '--cap-drop', 'ALL',
                    '--security-opt', 'no-new-privileges:true',
