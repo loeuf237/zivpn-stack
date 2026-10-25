@@ -17,32 +17,99 @@ A native UDP server compatible with the ZiVPN Android client, with 3X-UI account
 
 Both profiles use **UDP 5667**. UDP 5668 is an optional compatibility listener for older Premium profiles. Bandwidth values are shared ceilings, not guaranteed throughput; 1 MB/s means 1,000,000 bytes/s.
 
-## Get started with development
+## Get started: install on your server
 
-Use Linux, Python 3.10 or newer, Git, Make and [uv 0.13.1](https://docs.astral.sh/uv/getting-started/installation/). Native race tests also require a C compiler.
+**Use this section to run the VPN stack.** The [development commands](#development-and-tests) are for building and testing the source code. A working installation also needs your server address, Telegram configuration and firewall access; copying build commands alone does not provide these.
+
+### 1. Prepare your server and Telegram bot
+
+Use an Ubuntu 24.04 or Debian 12 **server VM**, with systemd, a public IPv4 address, and a sudo-enabled SSH account. Run the commands below **on that server**, not on your personal computer. If you log in as root, omit `sudo`.
+
+For a new installation or legacy migration, have these ready. If your ZiVPN Stack is already configured, keep its current bot/credentials and proceed to step 2:
+
+- Your server's public IPv4 address or a DNS name pointing to it.
+- A **new Telegram bot token**, created with `/newbot` in the official [@BotFather](https://t.me/BotFather) chat. Use a separate bot for each server.
+- Your **numeric Telegram user ID**, not your `@username`. See [how to find it using your own bot](docs/QUICKSTART.md#find-your-telegram-user-id).
+- A panel administrator username and a unique password of at least 20 characters.
+
+In your cloud provider's firewall/security group, allow **UDP 5667**. If a host firewall is enabled, allow it there too. Keep your existing SSH access rule. UDP 5668 is optional for older Premium profiles. The installer does not configure your cloud firewall.
+
+### 2. Download the project and inspect the server
+
+On a new server, install the small set of tools needed to start:
 
 ```bash
+sudo apt-get update
+sudo apt-get install -y git python3 iptables nano ca-certificates
 git clone https://github.com/loeuf237/zivpn-stack.git
 cd zivpn-stack
-uv sync --locked --python 3.12
-uv run --locked make test
-uv run --locked make build
-uv run --locked make test-native
-uv run --locked make check
+sudo python3 tools/install.py --check
 ```
 
-`pyproject.toml` declares the Python dependencies; `uv.lock` locks their full resolution. `uv sync --locked` fails if the manifest and lock disagree. `requirements.txt` is a generated compatibility export for the existing systemd installer, not a separate dependency source.
+If the repository is already cloned, use its existing directory and run `git switch main` followed by `git pull --ff-only` instead of cloning it again.
 
-To update dependencies deliberately:
+Read the `Planned action` message:
+
+| Result | Next step |
+| --- | --- |
+| `install` | New server: continue with step 3. |
+| `migrate` | Legacy `udp-zivpn` server: continue with step 3 to add the panel and bot. Existing passwords and TLS files are retained. |
+| `update` | Existing ZiVPN Stack: run `sudo python3 tools/install.py`, then go to step 5. Its current settings and credentials are preserved. |
+| An error or unsupported layout | Follow the diagnostic and [migration guide](docs/UPGRADES.md) before applying changes. |
+
+The inspection does not install or restart services. Applying an update or migration briefly interrupts VPN connections and retains a private recovery backup.
+
+### 3. Enter your private settings (new install or legacy migration)
+
+Create the private files outside the repository. These commands retain files that already exist:
 
 ```bash
-uv lock --upgrade
-uv sync --locked
-uv export --locked --no-dev --no-hashes --no-emit-project --output-file requirements.txt
-uv run --locked make test
+sudo install -d -m 700 /root/zivpn-config
+sudo test -e /root/zivpn-config/settings.json || sudo install -m 600 config/settings.example.json /root/zivpn-config/settings.json
+sudo test -e /root/zivpn-config/secrets.json || sudo install -m 600 config/secrets.example.json /root/zivpn-config/secrets.json
+sudo nano /root/zivpn-config/settings.json
 ```
 
-The build downloads the Go version and verifies the archive SHA-256 from `config/artifacts.json`. The QUIC fork currently requires **Go 1.21.13**, an old toolchain; upgrading it requires a coordinated fork migration. `make test-native` runs race-enabled QoS, server, congestion, integration, QUIC and obfuscation tests, excluding stress tests. `.venv/`, `.cache/` and `build/` are local artifacts.
+In `settings.json`, replace `vpn.example.com` with your server address and `123456789` with **your own numeric Telegram ID**. Leave `network_interface` as `null` for automatic detection. Keep JSON quotation marks and commas intact. In nano, save with **Ctrl+O**, press **Enter**, then exit with **Ctrl+X**.
+
+Now edit the credentials:
+
+```bash
+sudo nano /root/zivpn-config/secrets.json
+sudo chmod 600 /root/zivpn-config/settings.json /root/zivpn-config/secrets.json
+```
+
+Replace `REPLACE_ON_TARGET` with your bot token, choose the panel username, and replace `REPLACE_WITH_UNIQUE_PASSWORD` with your unique panel password. Do not leave example values in these files. Keep the token and password in these private files and your password manager.
+
+### 4. Check your configuration, then install
+
+```bash
+sudo python3 tools/install.py --settings /root/zivpn-config/settings.json --secrets /root/zivpn-config/secrets.json --check
+```
+
+If the check succeeds and the planned action matches your server, apply it:
+
+```bash
+sudo python3 tools/install.py --settings /root/zivpn-config/settings.json --secrets /root/zivpn-config/secrets.json
+```
+
+The installer downloads verified artifacts, builds the native server, installs Python dependencies and starts the services. **You do not need to install uv, Go or Make manually for this deployment path.** The legacy migration imports Standard accounts by default (1 MB/s per public IP); see [profile selection and recovery](docs/UPGRADES.md) before migrating if you need Premium accounts.
+
+### 5. Verify the services and connect your first client
+
+```bash
+sudo systemctl is-active x-ui zivpn zivpn-xui-sync
+```
+
+Expect **three `active` lines**. If a service is not active, read its recent logs and resolve the error before retrying the installer:
+
+```bash
+sudo journalctl -u x-ui -u zivpn -u zivpn-xui-sync -n 80 --no-pager
+```
+
+Open a private chat with your Telegram bot from the administrator account, send `/start`, then `/menu` and `/status`. For a new installation, create a test account with `/add <name> <unique-password> standard 1`, replacing the bracketed values. On Android, enter the server address, UDP port **5667** and that account password, then verify browsing through the tunnel. Existing migrated accounts keep their original passwords.
+
+The 3X-UI panel listens on `127.0.0.1:2053`. See [accessing the panel through SSH](docs/QUICKSTART.md#access-the-panel) and the [full beginner walkthrough](docs/QUICKSTART.md). The intended platform/cloud matrix and full systemd migration still need validation on disposable servers; successful service checks alone do not prove client connectivity.
 
 ## Docker
 
@@ -56,29 +123,6 @@ The multi-stage image builds the native server with the checksum-pinned Go toolc
 The supplied Compose service runs **the native server only** on Linux with host networking, preserving client IPs for Standard limits. It requires an existing compatible 3X-UI database, a native configuration and TLS files outside the repository. **3X-UI and the Telegram/accounting daemon remain host services.** Their systemd, firewall and host-administration features are not containerized.
 
 Read [the Docker deployment guide](docs/DOCKER.md) before starting Compose, especially the socket/accounting integration and migration steps. Do not start it beside a host server already listening on the same UDP ports. A healthy container confirms process and policy availability, not real Android connectivity or carrier interoperability.
-
-## Install, update or migrate a server
-
-The systemd installer remains the full-stack deployment path. See [deployment and migration](docs/DEPLOYMENT.md) for preparation, private configuration, installation and verification. That operational guide currently remains in French.
-
-Intended targets are Ubuntu 24.04 and Debian 12 with Python 3.10+, systemd, IPv4, and x86-64 or ARM64. Open UDP 5667 in both cloud and host firewalls; open UDP 5668 only if legacy clients need it. The panel binds to `127.0.0.1:2053`; access it through an SSH tunnel. The bot uses long polling and needs no incoming webhook port.
-
-The installer detects the host before changing installation files:
-
-- **New host:** install the full stack using new private settings and credentials.
-- **Existing supported ZiVPN Stack:** update the server, helpers and Python environment while preserving the database, accounts, quotas, counters, certificates, panel credentials, Telegram token and deployment settings.
-- **The password-based [zahidbd2/udp-zivpn script](https://github.com/zahidbd2/udp-zivpn):** migrate unique passwords into 3X-UI accounts and retain the existing TLS files. Imported accounts use Standard by default; choose `--legacy-profile premium` to change this.
-
-```bash
-# Read-only detection, with no setup secrets required:
-sudo python3 tools/install.py --check
-# Update an already configured stack, preserving its settings and credentials:
-sudo python3 tools/install.py
-```
-
-New installs and legacy migrations additionally require `--settings` and `--secrets`; see [the update and migration guide](docs/UPGRADES.md). Downloads, builds and dependency installation finish before existing services stop. A private backup and runtime rollback protect supported updates. Unrelated port owners, unsupported authentication layouts and failed inspection checks still require review; the installer never kills arbitrary processes or runs an upstream uninstall script.
-
-The pinned panel is 3X-UI v3.8.5; updates to an existing stack retain its panel binary and database rather than downgrading or reseeding them. Cloud provisioning and firewall rules remain operator responsibilities; the fresh-VM cloud and ARM64 deployment matrix is not fully validated.
 
 ## Manage accounts from Telegram
 
@@ -123,6 +167,35 @@ The native configuration accepts `congestionControl: "bbr"`, `"reno"` or `"cubic
 `initialPacketSize` is the QUIC payload size before obfuscation, between 1,200 and 1,452 bytes. Zero or omission retains initial defaults of 1,252 bytes for IPv4 and 1,232 for IPv6. Salamander adds 8 bytes to the UDP payload. Disabling path MTU discovery keeps the selected size and may help constrained paths; it does not eliminate every source of loss.
 
 See [QUIC fixes and limitations](docs/BBR_FIX.md) for BBR pacing, ACK aggregation, CUBIC provenance and Salamander concurrency fixes. Local tests cover saturated queues, slow links and MTU constraints. Telemetry distinguishes QUIC loss reasons and some late acknowledgements; it does not directly measure physical packet loss.
+
+## Development and tests
+
+These commands are for contributors. They build and test the project; they do not deploy the services.
+
+Use Linux, Python 3.10 or newer, Git, Make and [uv 0.13.1](https://docs.astral.sh/uv/getting-started/installation/). Native race tests also require a C compiler.
+
+```bash
+git clone https://github.com/loeuf237/zivpn-stack.git
+cd zivpn-stack
+uv sync --locked --python 3.12
+uv run --locked make test
+uv run --locked make build
+uv run --locked make test-native
+uv run --locked make check
+```
+
+`pyproject.toml` declares the Python dependencies; `uv.lock` locks their full resolution. `uv sync --locked` fails if the manifest and lock disagree. `requirements.txt` is a generated compatibility export for the existing systemd installer, not a separate dependency source.
+
+To update dependencies deliberately:
+
+```bash
+uv lock --upgrade
+uv sync --locked
+uv export --locked --no-dev --no-hashes --no-emit-project --output-file requirements.txt
+uv run --locked make test
+```
+
+The build downloads the Go version and verifies the archive SHA-256 from `config/artifacts.json`. The QUIC fork currently requires **Go 1.21.13**, an old toolchain; upgrading it requires a coordinated fork migration. `make test-native` runs race-enabled QoS, server, congestion, integration, QUIC and obfuscation tests, excluding stress tests. `.venv/`, `.cache/` and `build/` are local artifacts.
 
 ## Validation and CI
 
