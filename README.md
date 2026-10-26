@@ -32,7 +32,7 @@ For a new installation or legacy migration, have these ready. If your ZiVPN Stac
 - Your **numeric Telegram user ID**, not your `@username`. See [how to find it using your own bot](docs/QUICKSTART.md#find-your-telegram-user-id).
 - A panel administrator username and a unique password of at least 20 characters.
 
-In your cloud provider's firewall/security group, allow **UDP 5667**. If a host firewall is enabled, allow it there too. Keep your existing SSH access rule. UDP 5668 is optional for older Premium profiles. The installer does not configure your cloud firewall.
+Keep your existing SSH access rule. After installation, follow **step 5** to open the VPN ports in both the VPS firewall and your provider's firewall/security group. The installer does not configure these access rules.
 
 ### 2. Download the project and inspect the server
 
@@ -95,19 +95,52 @@ sudo python3 tools/install.py --settings /root/zivpn-config/settings.json --secr
 
 The installer downloads verified artifacts, builds the native server, installs Python dependencies and starts the services. **You do not need to install uv, Go or Make manually for this deployment path.** The legacy migration imports Standard accounts by default (1 MB/s per public IP); see [profile selection and recovery](docs/UPGRADES.md) before migrating if you need Premium accounts.
 
-### 5. Verify the services and connect your first client
+### 5. Open the VPS and cloud firewall ports
+
+**Do this after the installer finishes, before connecting Android.** There are two independent firewalls: one inside the VPS, and one in your hosting provider's console. An active VPN service does not mean either firewall allows access.
+
+| Incoming traffic | What to allow |
+| --- | --- |
+| VPN for Standard and Premium | **UDP 5667**, from the client networks that need access; `0.0.0.0/0` if mobile clients must connect from any public IPv4 address. |
+| Older Premium profiles | **UDP 5668**, only if your clients use it. |
+| SSH administration | Keep your actual SSH **TCP** port and existing administrator source restriction. Port 22 is only the default. |
+| Optional VPN aliases | Only the **UDP** ports clients actually use: 5666, 80, 443, 8080, 8443, 8888 or selected ports in 6000–30000. The stack redirects these to UDP 5667. |
+| 3X-UI and internal APIs | No public rule: TCP 2053 stays on loopback and the native API uses a private Unix socket. Use the [SSH tunnel](docs/QUICKSTART.md#access-the-panel) for the panel. |
+
+**In the provider's console:** find the firewall attached to this VPS or its network interface, add an inbound **allow / UDP / destination port 5667** rule with the required source range, and save/apply it. For example, use an AWS Security Group, Azure NSG, Google Cloud VPC firewall or your VPS provider's firewall. Add UDP 5668 or an alias only when needed. Opening **TCP** 5667 does not allow this VPN. See [provider-specific notes](docs/DEPLOYMENT.md#ouvrir-les-ports).
+
+**On the VPS, if you already use UFW:** inspect its status, then add the VPN rule if it is active:
+
+```bash
+sudo ufw status verbose
+sudo ufw allow 5667/udp
+sudo ufw status numbered
+```
+
+The final output should show `5667/udp` as allowed. If older clients use UDP 5668, also run `sudo ufw allow 5668/udp`. Rules added to an active UFW firewall take effect immediately and persist; see the [Ubuntu firewall guide](https://ubuntu.com/server/docs/firewalls/).
+
+If UFW is missing or reports `inactive`, it is not currently filtering traffic. Do not install or enable it just to run these commands: first identify any existing nftables/iptables firewall and allow UDP 5667 in that firewall's persistent configuration. If no host firewall blocks incoming traffic, no host allow rule is needed; the cloud rule still applies. Do not flush rules or disable the firewall. Enabling a new firewall over SSH requires allowing your actual SSH port first and keeping recovery-console access.
+
+For an optional alias, the provider must allow the original UDP destination port. The VPS input filter normally sees **5667 after the stack's NAT redirect**, so keep the 5667 allow rule. After a host firewall reload, restore the managed aliases with `sudo systemctl restart zivpn-ports` and inspect them with `sudo iptables -t nat -S ZIVPN-UDP`. This command reapplies aliases; it does not open the cloud firewall.
+
+Keep outbound traffic available for DNS, artifact downloads and Telegram HTTPS, and for destinations reached through the VPN. The Telegram bot uses polling and needs no public inbound webhook port.
+
+### 6. Verify the services and connect your first client
 
 ```bash
 sudo systemctl is-active x-ui zivpn zivpn-xui-sync
+sudo ss -lunp 'sport = :5667 or sport = :5668'
 ```
 
-Expect **three `active` lines**. If a service is not active, read its recent logs and resolve the error before retrying the installer:
+The first command should print **three `active` lines**; the second should show the native UDP listeners. A local listener does not prove external firewall access. If a service is not active, read its recent logs and resolve the error before retrying the installer:
 
 ```bash
 sudo journalctl -u x-ui -u zivpn -u zivpn-xui-sync -n 80 --no-pager
 ```
 
 Open a private chat with your Telegram bot from the administrator account, send `/start`, then `/menu` and `/status`. For a new installation, create a test account with `/add <name> <unique-password> standard 1`, replacing the bracketed values. On Android, enter the server address, UDP port **5667** and that account password, then verify browsing through the tunnel. Existing migrated accounts keep their original passwords.
+
+If the client times out, recheck the **UDP** rule in both firewalls, its source range and its attachment to the correct VPS. A failed ping, a TCP port checker or a local listening socket cannot establish whether an authenticated UDP VPN connection works.
 
 The 3X-UI panel listens on `127.0.0.1:2053`. See [accessing the panel through SSH](docs/QUICKSTART.md#access-the-panel) and the [full beginner walkthrough](docs/QUICKSTART.md). The intended platform/cloud matrix and full systemd migration still need validation on disposable servers; successful service checks alone do not prove client connectivity.
 
