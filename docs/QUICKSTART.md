@@ -93,21 +93,22 @@ Run the README's `--check` command first. It reports `install`, `migrate` or `up
 
 A preview does not configure the server. Applying a supported update/migration restarts managed services and interrupts current tunnels briefly. An unsupported layout or occupied port requires reading the diagnostic before proceeding.
 
-## Open the VPN port
+## Open the VPN ports after installation
 
-Allow incoming **UDP 5667** in your cloud firewall/security group and in any enabled host firewall. Select UDP, not TCP. Keep your current SSH access rule. UDP 5668 is optional for older Premium profiles; the panel's TCP 2053 port stays private.
+Follow [README step 5](../README.md#5-open-the-vps-and-cloud-firewall-ports) after the installer finishes. It lists the required and optional ports, provider-console settings, UFW commands, alias behavior and checks. Allow incoming **UDP 5667** in both the cloud firewall/security group and any enabled host firewall. Select UDP, not TCP. Keep your actual SSH port accessible. UDP 5668 is optional for older Premium profiles; the panel's TCP 2053 port stays private.
 
 For an already enabled UFW firewall, allow the VPN port on the server:
 
 ```bash
 sudo ufw allow 5667/udp
+sudo ufw status numbered
 ```
 
 Use this command only if the host already uses UFW. The cloud firewall is a separate setting in the provider's console; neither this command nor the installer opens it. See [provider-specific firewall notes](DEPLOYMENT.md#ouvrir-les-ports).
 
 ## Verify the installation
 
-`sudo systemctl is-active x-ui zivpn zivpn-xui-sync` should print three `active` lines. If it prints `failed` or `inactive`, inspect the logs shown in README step 5. Repeating the installer without reading its diagnostic may not fix a partial installation.
+`sudo systemctl is-active x-ui zivpn zivpn-xui-sync` should print three `active` lines. If it prints `failed` or `inactive`, inspect the logs shown in [README step 6](../README.md#6-verify-the-services-and-connect-your-first-client). Repeating the installer without reading its diagnostic may not fix a partial installation.
 
 In the primary administrator's private Telegram chat, send `/menu` and `/status`. For a new server, `/add <name> <unique-password> standard 1` creates a Standard test account; replace the bracketed values. Connect the Android client to your server's address on UDP 5667 with that account password. Test browsing, then review `/qualite` and `/sante 24`. An active service is not proof that a cloud firewall or mobile network allows the tunnel.
 
